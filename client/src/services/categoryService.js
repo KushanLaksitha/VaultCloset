@@ -1,0 +1,11 @@
+import { api } from './api.js';
+
+export const categoryService = {
+  list: () => api.get('/categories'),
+  create: (name) => api.post('/categories', { name }),
+  rename: (id, name) => api.patch(`/categories/${id}`, { name }),
+  remove: (id, passwords = {}) => api.request(`/categories/${id}`, { method: 'DELETE', body: passwords }),
+  setPin: (id, pin, currentPin) => api.post(`/categories/${id}/pin`, { pin, currentPin }),
+  removePin: (id, pin) => api.request(`/categories/${id}/pin`, { method: 'DELETE', body: { pin } }),
+  verifyPin: (id, pin) => api.post(`/categories/${id}/pin/verify`, { pin }),
+};
