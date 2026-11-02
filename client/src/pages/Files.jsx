@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { fileService } from '../services/fileService.js';
@@ -74,7 +74,15 @@ export default function Files() {
     return () => window.removeEventListener('vc:unlocked-change', onUnlockedChange);
   }, []);
 
-  // Load video and document categories separately
+  // Memoized all file categories
+  const allFileCategories = useMemo(
+    () => [...videoCategories, ...docCategories],
+    [videoCategories, docCategories]
+  );
+  const categoriesRef = useRef(allFileCategories);
+  categoriesRef.current = allFileCategories;
+
+  // Load video and document categories once on mount
   const loadCategories = useCallback(() => {
     Promise.all([categoryService.list('video'), categoryService.list('document')])
       .then(([vRes, dRes]) => {
@@ -83,18 +91,18 @@ export default function Files() {
         setVideoCategories(vCats);
         setDocCategories(dCats);
 
-        // Auto-select initial category if none selected
-        if (!selectedCatId) {
+        setSelectedCatId((curr) => {
+          if (curr) return curr;
           const list = uploadType === 'video' ? vCats : dCats;
-          if (list.length) setSelectedCatId(String(list[0].id));
-        }
+          return list[0] ? String(list[0].id) : '';
+        });
       })
       .catch(() => {});
-  }, [selectedCatId, uploadType]);
+  }, [uploadType]);
 
   useEffect(() => {
     loadCategories();
-  }, [loadCategories]);
+  }, []); // Only once on mount!
 
   // When uploadType toggles, set selectedCatId to first category of that type
   const handleUploadTypeChange = (nextType) => {
@@ -103,9 +111,7 @@ export default function Files() {
     if (list.length) setSelectedCatId(String(list[0].id));
   };
 
-  const allFileCategories = [...videoCategories, ...docCategories];
-
-  // Load files
+  // Load files - strictly depends on filter `f`
   const loadFiles = useCallback(async () => {
     setLoading(true);
     try {
@@ -114,7 +120,7 @@ export default function Files() {
       setTotal(res.total || 0);
     } catch (err) {
       if (err.code === 'LOCKED_CATEGORY' && f.category) {
-        const cat = allFileCategories.find((c) => String(c.id) === String(f.category));
+        const cat = categoriesRef.current.find((c) => String(c.id) === String(f.category));
         setPinModal({ catId: f.category, catName: cat?.name || 'Folder', masked: !!cat?.masked });
       } else {
         toast(err.message || 'Failed to load files', 'err');
@@ -122,10 +128,10 @@ export default function Files() {
     } finally {
       setLoading(false);
     }
-  }, [f, allFileCategories, toast]);
+  }, [f, toast]);
 
   useEffect(() => {
-    const timer = setTimeout(loadFiles, 200);
+    const timer = setTimeout(loadFiles, 150);
     return () => clearTimeout(timer);
   }, [loadFiles]);
 
@@ -623,7 +629,7 @@ export default function Files() {
       </div>
 
       {/* Files Display */}
-      {loading ? (
+      {loading && files.length === 0 ? (
         <div className="center pad">
           <span className="spinner" />
           <p className="muted small">Loading vault files…</p>
@@ -648,7 +654,15 @@ export default function Files() {
           </button>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: '14px' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))',
+            gap: '14px',
+            opacity: loading ? 0.7 : 1,
+            transition: 'opacity 0.2s',
+          }}
+        >
           <AnimatePresence>
             {files.map((file) => {
               const icon = getFileIcon(file.name, file.fileType);
@@ -657,10 +671,9 @@ export default function Files() {
               return (
                 <motion.div
                   key={file.id}
-                  layout
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
                   className="glass pad"
                   style={{
                     display: 'flex',

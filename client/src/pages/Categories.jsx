@@ -323,8 +323,8 @@ export default function Categories() {
                         {isMaskedLocked
                           ? '🔓 Reveal & View'
                           : c.hasPin && !unlocked
-                          ? '🔒 Unlock & View'
-                          : '👁️ View Contents'}
+                            ? '🔒 Unlock & View'
+                            : '👁️ View Contents'}
                       </button>
 
                       {!isMaskedLocked && (
@@ -506,8 +506,8 @@ export default function Categories() {
           pinModal?.mode === 'set'
             ? `Set Password for "${pinModal?.name}"`
             : pinModal?.mode === 'change'
-            ? `Change Password for "${pinModal?.name}"`
-            : `Remove Password from "${pinModal?.name}"`
+              ? `Change Password for "${pinModal?.name}"`
+              : `Remove Password from "${pinModal?.name}"`
         }
       >
         <form onSubmit={handlePinSubmit} style={{ display: 'grid', gap: '14px' }}>
@@ -573,10 +573,10 @@ export default function Categories() {
               {submitting
                 ? 'Saving…'
                 : pinModal?.mode === 'set'
-                ? 'Save Password'
-                : pinModal?.mode === 'change'
-                ? 'Update Password'
-                : 'Remove Password'}
+                  ? 'Save Password'
+                  : pinModal?.mode === 'change'
+                    ? 'Update Password'
+                    : 'Remove Password'}
             </button>
           </div>
         </form>
