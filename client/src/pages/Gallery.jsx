@@ -99,8 +99,10 @@ export default function Gallery() {
       return;
     }
     const cat = cats.find((c) => String(c.id) === String(catIdStr));
-    if (cat?.hasPin && !unlockedStore.has(cat.id)) {
-      setLockModal({ catId: cat.id, catName: cat.name });
+    // Masked (stealth) or PIN-protected categories that aren't unlocked yet
+    if ((cat?.masked || cat?.hasPin) && !unlockedStore.has(cat.id)) {
+      // For masked categories the name must not be revealed here — show generic modal
+      setLockModal({ catId: cat.id, catName: null, masked: !!cat.masked });
       return;
     }
     setF({ ...f, category: catIdStr });
@@ -165,12 +167,11 @@ export default function Gallery() {
         <div className="row" style={{ gap: '6px' }}>
           <select value={f.category} onChange={(e) => handleCategoryChange(e.target.value)}>
             <option value="">All folders</option>
-            {cats.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.hasPin ? (unlockedStore.has(c.id) ? '🔓 ' : '🔒 ') : ''}
-                {c.name}
-              </option>
-            ))}
+            {cats.map((c) => {
+              const revName = unlockedStore.getName(c.id);
+              const displayLabel = c.masked && !revName ? '🔒 Hidden' : ((c.hasPin ? (unlockedStore.has(c.id) ? '🔓 ' : '🔒 ') : '') + (revName || c.name));
+              return <option key={c.id} value={c.id}>{displayLabel}</option>;
+            })}
           </select>
 
           {isActiveCatUnlocked && (

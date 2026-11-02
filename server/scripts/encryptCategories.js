@@ -38,3 +38,4 @@ const { encryptCategory } = require('../services/encryptionService');
     process.exit(0);
   }
 })();
+

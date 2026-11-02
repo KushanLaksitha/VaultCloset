@@ -19,10 +19,20 @@ export default function Categories() {
   const [pinForm, setPinForm] = useState({ currentPin: '', pin: '', confirmPin: '' });
   const [submitting, setSubmitting] = useState(false);
 
-  // Category Unlock & View Modal
-  const [unlockModal, setUnlockModal] = useState(null); // { id, name }
+  // Category Unlock Modal (stealth: generic, no name shown until unlocked)
+  const [unlockModal, setUnlockModal] = useState(null); // { id, masked: bool, name: string|null }
   const [unlockPin, setUnlockPin] = useState('');
   const [unlockSubmitting, setUnlockSubmitting] = useState(false);
+
+  // Track revealed names/counts for masked categories within this session
+  const [revealed, setRevealed] = useState(() => unlockedStore.getNames());
+
+  // Sync revealed state when unlocked store changes (e.g. vault lock clears all)
+  useEffect(() => {
+    const onChanged = () => setRevealed(unlockedStore.getNames());
+    window.addEventListener('vc:unlocked-change', onChanged);
+    return () => window.removeEventListener('vc:unlocked-change', onChanged);
+  }, []);
 
   const load = () => categoryService.list().then((r) => setList(r.categories)).catch((e) => toast(e.message, 'err'));
   useEffect(() => { load(); }, []); // eslint-disable-line
@@ -38,18 +48,33 @@ export default function Categories() {
     }
   };
 
+  // Get effective display name for a category card (uses revealed map for masked ones)
+  const getDisplayName = (c) => {
+    if (!c.masked) return c.name;
+    const rev = revealed[c.id];
+    return rev ? rev.name : null;
+  };
+
+  const getImageCount = (c) => {
+    if (!c.masked) return c.imageCount;
+    const rev = revealed[c.id];
+    return rev != null ? rev.imageCount : null;
+  };
+
+  const isUnlocked = (c) => (c.masked ? unlockedStore.has(c.id) : true);
+
   const openPinModal = (cat, mode) => {
-    setPinModal({ id: cat.id, name: cat.name, mode });
+    setPinModal({ id: cat.id, name: getDisplayName(cat), mode });
     setPinForm({ currentPin: '', pin: '', confirmPin: '' });
   };
 
-  // Open category photos (asks for password if locked)
-  const handleOpenCategory = (cat) => {
-    if (cat.hasPin && !unlockedStore.has(cat.id)) {
-      setUnlockModal(cat);
+  // Open category photos (asks for password if locked/masked)
+  const handleOpenCategory = (c) => {
+    if ((c.masked || c.hasPin) && !unlockedStore.has(c.id)) {
+      setUnlockModal({ id: c.id, masked: !!c.masked });
       setUnlockPin('');
     } else {
-      navigate(`/gallery?category=${cat.id}`);
+      navigate(`/gallery?category=${c.id}`);
     }
   };
 
@@ -58,11 +83,15 @@ export default function Categories() {
     if (!unlockModal) return;
     setUnlockSubmitting(true);
     try {
-      await categoryService.verifyPin(unlockModal.id, unlockPin);
-      unlockedStore.add(unlockModal.id);
-      toast(`Folder “${unlockModal.name}” unlocked`);
+      const res = await categoryService.verifyPin(unlockModal.id, unlockPin);
+      // Store revealed name from server response (only returned on correct PIN)
+      unlockedStore.add(unlockModal.id, res.name || null, res.imageCount ?? null);
+      setRevealed(unlockedStore.getNames());
+      const revealedName = res.name || 'Folder';
+      toast(`Folder "${revealedName}" unlocked`);
       const catId = unlockModal.id;
       setUnlockModal(null);
+      setUnlockPin('');
       navigate(`/gallery?category=${catId}`);
     } catch (err) {
       toast(err.message || 'Incorrect password', 'err');
@@ -81,7 +110,8 @@ export default function Categories() {
         userPassword: delForm.userPassword,
         categoryPassword: delForm.categoryPassword,
       });
-      toast(`Category “${del.name}” deleted`);
+      const label = getDisplayName(del) || 'Hidden Category';
+      toast(`Category "${label}" deleted`);
       setDel(null);
       setDelForm({ userPassword: '', categoryPassword: '' });
       await load();
@@ -109,7 +139,7 @@ export default function Categories() {
           return;
         }
         await categoryService.setPin(pinModal.id, pinForm.pin, pinModal.mode === 'change' ? pinForm.currentPin : undefined);
-        toast(`Password ${pinModal.mode === 'set' ? 'set' : 'updated'} for “${pinModal.name}”`);
+        toast(`Password ${pinModal.mode === 'set' ? 'set' : 'updated'}`);
       } else if (pinModal.mode === 'remove') {
         if (!pinForm.currentPin) {
           toast('Please enter the current password', 'err');
@@ -117,7 +147,7 @@ export default function Categories() {
           return;
         }
         await categoryService.removePin(pinModal.id, pinForm.currentPin);
-        toast(`Password removed from “${pinModal.name}”`);
+        toast('Password removed');
       }
       setPinModal(null);
       await load();
@@ -132,7 +162,7 @@ export default function Categories() {
     <>
       <header className="page-head">
         <div>
-          <h1>Categories & Folders</h1>
+          <h1>Categories &amp; Folders</h1>
           <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>
             Organize images into folders. You can set a password for each folder to keep its photos private and unlock them securely.
           </p>
@@ -146,94 +176,123 @@ export default function Categories() {
 
       <div className="list">
         <AnimatePresence>
-          {list.map((c) => (
-            <motion.div key={c.id} layout className="glass pad crow" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, x: -30 }}>
-              {edit?.id === c.id ? (
-                <form className="row grow" onSubmit={(e) => { e.preventDefault(); run(() => categoryService.rename(c.id, edit.name), 'Renamed')().then(() => setEdit(null)); }}>
-                  <input autoFocus value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} maxLength={60} />
-                  <button className="btn primary">Save</button>
-                  <button type="button" className="btn ghost" onClick={() => setEdit(null)}>Cancel</button>
-                </form>
-              ) : (
-                <>
-                  <div className="grow" style={{ display: 'grid', gap: '4px' }}>
-                    <div className="row" style={{ gap: '8px' }}>
-                      <b style={{ fontSize: '1.05rem' }}>{c.name}</b>
-                      {c.hasPin ? (
+          {list.map((c) => {
+            const displayName = getDisplayName(c);
+            const imageCount = getImageCount(c);
+            const unlocked = isUnlocked(c);
+            const isMaskedLocked = c.masked && !unlocked;
 
-                        <span className="badge" style={{ background: 'rgba(232, 201, 165, 0.18)', color: 'var(--gold)' }}>
-                          🔒 Password Protected {unlockedStore.has(c.id) ? '(Unlocked)' : '(Locked)'}
-                        </span>
-                      ) : (
-                        <span className="badge" style={{ opacity: 0.6 }}>
-                          🔓 Open
-                        </span>
-                      )}
+            return (
+              <motion.div key={c.id} layout className="glass pad crow" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, x: -30 }}>
+                {/* Rename form only available for fully-revealed categories */}
+                {!isMaskedLocked && edit?.id === c.id ? (
+                  <form className="row grow" onSubmit={(e) => { e.preventDefault(); run(() => categoryService.rename(c.id, edit.name), 'Renamed')().then(() => setEdit(null)); }}>
+                    <input autoFocus value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} maxLength={60} />
+                    <button className="btn primary">Save</button>
+                    <button type="button" className="btn ghost" onClick={() => setEdit(null)}>Cancel</button>
+                  </form>
+                ) : (
+                  <>
+                    <div className="grow" style={{ display: 'grid', gap: '4px' }}>
+                      <div className="row" style={{ gap: '8px' }}>
+                        {isMaskedLocked ? (
+                          <b style={{ fontSize: '1.05rem', opacity: 0.55, fontStyle: 'italic' }}>🔒 Hidden Category</b>
+                        ) : (
+                          <b style={{ fontSize: '1.05rem' }}>{displayName}</b>
+                        )}
+                        {c.hasPin ? (
+                          <span className="badge" style={{ background: 'rgba(232, 201, 165, 0.18)', color: 'var(--gold)' }}>
+                            🔒 Password Protected {unlocked ? '(Unlocked)' : '(Locked)'}
+                          </span>
+                        ) : (
+                          <span className="badge" style={{ opacity: 0.6 }}>
+                            🔓 Open
+                          </span>
+                        )}
+                      </div>
+                      <div className="muted small">
+                        {isMaskedLocked
+                          ? '— unlock to reveal details'
+                          : `${imageCount} image${imageCount === 1 ? '' : 's'}`}
+                      </div>
                     </div>
-                    <div className="muted small">{c.imageCount} image{c.imageCount === 1 ? '' : 's'}</div>
-                  </div>
 
-                  <div className="row" style={{ gap: '8px', flexWrap: 'wrap' }}>
-                    {/* Open & View Photos Button */}
-                    <button
-                      type="button"
-                      className="btn primary"
-                      style={{ padding: '6px 14px', fontSize: '0.88rem' }}
-                      onClick={() => handleOpenCategory(c)}
-                      title="Enter password (if protected) and view photos in this folder"
-                    >
-                      {c.hasPin && !unlockedStore.has(c.id) ? '🔒 Unlock & View' : '👁️ View Photos'}
-                    </button>
-
-                    <Link
-                      to={`/upload?category=${c.id}&mode=manual`}
-                      className="btn ghost"
-                      title="Add photos directly to this folder without AI"
-                      style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                    >
-                      📁 Add photos
-                    </Link>
-
-                    {c.hasPin ? (
-                      <>
-                        <button className="btn ghost" onClick={() => openPinModal(c, 'change')}>
-                          🔑 Change Password
-                        </button>
-                        <button className="btn ghost danger" onClick={() => openPinModal(c, 'remove')}>
-                          Remove Password
-                        </button>
-                      </>
-                    ) : (
-                      <button className="btn ghost" onClick={() => openPinModal(c, 'set')}>
-                        🔒 Set Password
+                    <div className="row" style={{ gap: '8px', flexWrap: 'wrap' }}>
+                      {/* Open & View Photos Button */}
+                      <button
+                        type="button"
+                        className="btn primary"
+                        style={{ padding: '6px 14px', fontSize: '0.88rem' }}
+                        onClick={() => handleOpenCategory(c)}
+                        title={isMaskedLocked ? 'Enter password to reveal and view this folder' : 'Enter password (if protected) and view photos in this folder'}
+                      >
+                        {isMaskedLocked ? '🔓 Reveal & View' : (c.hasPin && !unlocked ? '🔒 Unlock & View' : '👁️ View Photos')}
                       </button>
-                    )}
 
-                    <button className="btn ghost" onClick={() => setEdit({ id: c.id, name: c.name })}>Rename</button>
-                    <button
-                      className="btn ghost danger"
-                      onClick={() => {
-                        setDel(c);
-                        setDelForm({ userPassword: '', categoryPassword: '' });
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
+                      {!isMaskedLocked && (
+                        <Link
+                          to={`/upload?category=${c.id}&mode=manual`}
+                          className="btn ghost"
+                          title="Add photos directly to this folder without AI"
+                          style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          📁 Add photos
+                        </Link>
+                      )}
 
-                </>
-              )}
-            </motion.div>
-          ))}
+                      {/* PIN management — only show when category name is known (revealed) */}
+                      {!isMaskedLocked && (
+                        c.hasPin ? (
+                          <>
+                            <button className="btn ghost" onClick={() => openPinModal(c, 'change')}>
+                              🔑 Change Password
+                            </button>
+                            <button className="btn ghost danger" onClick={() => openPinModal(c, 'remove')}>
+                              Remove Password
+                            </button>
+                          </>
+                        ) : (
+                          <button className="btn ghost" onClick={() => openPinModal(c, 'set')}>
+                            🔒 Set Password
+                          </button>
+                        )
+                      )}
+
+                      {!isMaskedLocked && (
+                        <button className="btn ghost" onClick={() => setEdit({ id: c.id, name: displayName })}>Rename</button>
+                      )}
+
+                      <button
+                        className="btn ghost danger"
+                        onClick={() => {
+                          setDel(c);
+                          setDelForm({ userPassword: '', categoryPassword: '' });
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </>
+                )}
+              </motion.div>
+            );
+          })}
         </AnimatePresence>
       </div>
 
       {/* Delete Category Modal - Requires Both Passwords */}
-      <Modal open={!!del} onClose={() => setDel(null)} title={`Delete “${del?.name}”?`}>
+      <Modal
+        open={!!del}
+        onClose={() => setDel(null)}
+        title={del && getDisplayName(del) ? `Delete "${getDisplayName(del)}"?` : 'Delete hidden category?'}
+      >
         <form onSubmit={handleDeleteSubmit} style={{ display: 'grid', gap: '14px' }}>
           <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-            Deleting this category will move its {del?.imageCount} image{del?.imageCount === 1 ? '' : 's'} to another folder automatically.
-            Requires your <strong>Account Password</strong>{del?.hasPin ? <span> and the <strong>Category Password</strong></span> : ''}.
+            {del && getDisplayName(del)
+              ? <>Deleting this category will move its {getImageCount(del)} image{getImageCount(del) === 1 ? '' : 's'} to another folder automatically.</>
+              : <>Deleting this hidden category will move its images to another folder automatically.</>
+            }
+            {' '}Requires your <strong>Account Password</strong>{del?.hasPin ? <span> and the <strong>Category Password</strong></span> : ''}.
           </p>
 
           <label className="lbl" style={{ margin: 0 }}>
@@ -272,11 +331,15 @@ export default function Categories() {
         </form>
       </Modal>
 
-      {/* Category Password Unlock Modal (To view/open photos) */}
-      <Modal open={!!unlockModal} onClose={() => setUnlockModal(null)} title={`Unlock “${unlockModal?.name}”`}>
+      {/* Stealth Unlock Modal — NO category name shown; completely generic */}
+      <Modal
+        open={!!unlockModal}
+        onClose={() => { setUnlockModal(null); setUnlockPin(''); }}
+        title="Protected Folder"
+      >
         <form onSubmit={handleUnlockSubmit} style={{ display: 'grid', gap: '14px' }}>
           <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-            This folder is password protected. Enter the folder password to unlock and view its photos.
+            This folder is protected. Enter its password to reveal and view its contents.
           </p>
           <label className="lbl" style={{ margin: 0 }}>
             Folder Password
@@ -290,11 +353,11 @@ export default function Categories() {
             />
           </label>
           <div className="row end">
-            <button type="button" className="btn ghost" onClick={() => setUnlockModal(null)} disabled={unlockSubmitting}>
+            <button type="button" className="btn ghost" onClick={() => { setUnlockModal(null); setUnlockPin(''); }} disabled={unlockSubmitting}>
               Cancel
             </button>
             <button type="submit" className="btn primary" disabled={unlockSubmitting || !unlockPin}>
-              {unlockSubmitting ? 'Unlocking…' : 'Unlock & View Photos'}
+              {unlockSubmitting ? 'Verifying…' : 'Reveal & View Photos'}
             </button>
           </div>
         </form>
@@ -306,10 +369,10 @@ export default function Categories() {
         onClose={() => setPinModal(null)}
         title={
           pinModal?.mode === 'set'
-            ? `Set Password for “${pinModal?.name}”`
+            ? `Set Password for "${pinModal?.name}"`
             : pinModal?.mode === 'change'
-            ? `Change Password for “${pinModal?.name}”`
-            : `Remove Password from “${pinModal?.name}”`
+            ? `Change Password for "${pinModal?.name}"`
+            : `Remove Password from "${pinModal?.name}"`
         }
       >
         <form onSubmit={handlePinSubmit} style={{ display: 'grid', gap: '14px' }}>

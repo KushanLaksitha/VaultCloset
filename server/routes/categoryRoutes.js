@@ -21,20 +21,43 @@ const nameTaken = async (uid, name, exceptId = 0) => {
 
 // Helper: verify a category belongs to this user
 const ownedCat = async (uid, id) => {
-  const [[c]] = await db.query('SELECT id, user_id, is_default, pin_hash FROM categories WHERE id=? AND user_id=?', [id, uid]);
+  const [[c]] = await db.query('SELECT id, user_id, name, is_default, pin_hash FROM categories WHERE id=? AND user_id=?', [id, uid]);
   return c || null;
 };
 
 
 router.get('/', wrap(async (req, res) => {
+  // Parse unlocked category IDs from the request header (client session)
+  const unlockedIds = new Set(
+    (req.headers['x-unlocked-categories'] || '').split(',').map(Number).filter(Boolean)
+  );
+
   const [rows] = await db.query(
     `SELECT c.id, c.name, c.is_default AS isDefault, (pin_hash IS NOT NULL) AS hasPin,
        (SELECT COUNT(*) FROM images i WHERE i.category_id=c.id AND i.user_id=?) AS imageCount
      FROM categories c WHERE c.user_id=? ORDER BY c.is_default DESC, c.sort_order, c.name`, [req.user.id, req.user.id]);
-  const categories = rows.map((r) => ({
-    ...r,
-    name: decryptCategory(r.name, req.user.id),
-  }));
+
+  const categories = rows.map((r) => {
+    const decryptedName = decryptCategory(r.name, req.user.id);
+    const isLocked = r.hasPin && !unlockedIds.has(r.id);
+    if (isLocked) {
+      // Stealth mode: hide name and image count for PIN-locked categories
+      return {
+        id: r.id,
+        name: null,
+        isDefault: r.isDefault,
+        hasPin: true,
+        masked: true,
+        imageCount: null,
+      };
+    }
+    return {
+      ...r,
+      name: decryptedName,
+      masked: false,
+    };
+  });
+
   res.json({ categories });
 }));
 
@@ -178,9 +201,14 @@ router.post('/:id/pin/verify', wrap(async (req, res) => {
     throw new AppError(403, `Incorrect password. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining before temporary lockout.`, 'WRONG_PIN');
   }
 
-  // Success: clear failed attempts
+  // Success: clear failed attempts and reveal the real category name + imageCount
   pinAttempts.delete(lockKey);
-  res.json({ ok: true });
+  const decryptedName = decryptCategory(cat.name, req.user.id);
+  const [[{ imageCount }]] = await db.query(
+    'SELECT COUNT(*) AS imageCount FROM images WHERE category_id=? AND user_id=?',
+    [cat.id, req.user.id]
+  );
+  res.json({ ok: true, name: decryptedName, imageCount: Number(imageCount) });
 }));
 
 module.exports = router;

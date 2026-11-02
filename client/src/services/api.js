@@ -1,6 +1,8 @@
 // One small wrapper around fetch. Cookies (httpOnly session) are sent automatically.
 const UNLOCKED_KEY = 'vc_unlocked_cats';
+const UNLOCKED_NAMES_KEY = 'vc_unlocked_names';
 
+// Stores unlocked category IDs (array of numbers) and their revealed names (object: id -> { name, imageCount })
 export const unlockedStore = {
   get: () => {
     try {
@@ -10,19 +12,40 @@ export const unlockedStore = {
       return [];
     }
   },
-  add: (id) => {
+  getNames: () => {
+    try {
+      const saved = sessionStorage.getItem(UNLOCKED_NAMES_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  },
+  getName: (id) => {
+    const names = unlockedStore.getNames();
+    return names[+id] || null;
+  },
+  add: (id, name = null, imageCount = null) => {
     const list = [...new Set([...unlockedStore.get(), +id])];
     sessionStorage.setItem(UNLOCKED_KEY, JSON.stringify(list));
+    if (name !== null) {
+      const names = unlockedStore.getNames();
+      names[+id] = { name, imageCount };
+      sessionStorage.setItem(UNLOCKED_NAMES_KEY, JSON.stringify(names));
+    }
     window.dispatchEvent(new Event('vc:unlocked-change'));
   },
   remove: (id) => {
     const list = unlockedStore.get().filter((x) => x !== +id);
     sessionStorage.setItem(UNLOCKED_KEY, JSON.stringify(list));
+    const names = unlockedStore.getNames();
+    delete names[+id];
+    sessionStorage.setItem(UNLOCKED_NAMES_KEY, JSON.stringify(names));
     window.dispatchEvent(new Event('vc:unlocked-change'));
   },
   has: (id) => unlockedStore.get().includes(+id),
   clear: () => {
     sessionStorage.removeItem(UNLOCKED_KEY);
+    sessionStorage.removeItem(UNLOCKED_NAMES_KEY);
     window.dispatchEvent(new Event('vc:unlocked-change'));
   },
 };
