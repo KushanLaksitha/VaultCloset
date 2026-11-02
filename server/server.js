@@ -102,6 +102,7 @@ app.get('/api/network-info', (_req, res) => {
 
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/images', require('./routes/imageRoutes'));
+app.use('/api/files', require('./routes/fileRoutes'));
 app.use('/api/categories', require('./routes/categoryRoutes'));
 app.use('/api/rejected', require('./routes/rejectedRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));

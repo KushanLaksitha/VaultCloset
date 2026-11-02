@@ -8,6 +8,7 @@ const nav = [
   ['/', 'Dashboard'],
   ['/gallery', 'Gallery'],
   ['/upload', 'Add images'],
+  ['/files', 'Files'],
   ['/categories', 'Categories'],
   ['/rejected', 'Rejected'],
   ['/settings', 'Settings'],

@@ -4,5 +4,6 @@ const env = require('../config/env');
 // so a leaked image link can never be used as a login session.
 const signSession = (userId) => jwt.sign({ sub: userId, t: 'session' }, env.jwtSecret, { expiresIn: `${env.sessionHours}h` });
 const signMedia = (userId, imgId, kind, seconds) => jwt.sign({ sub: userId, img: imgId, kind, t: 'media' }, env.jwtSecret, { expiresIn: seconds });
+const signFile = (userId, fileId, kind, seconds) => jwt.sign({ sub: userId, fileId, kind, t: 'file' }, env.jwtSecret, { expiresIn: seconds });
 const verify = (token) => jwt.verify(token, env.jwtSecret);
-module.exports = { signSession, signMedia, verify };
+module.exports = { signSession, signMedia, signFile, verify };
