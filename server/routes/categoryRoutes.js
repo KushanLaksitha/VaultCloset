@@ -12,19 +12,18 @@ const cleanName = (v) => {
   if (!n || n.length > 60) throw new AppError(400, 'Category name must be 1–60 characters');
   return n;
 };
-// Check if name already taken for this specific user
-const nameTaken = async (uid, name, exceptId = 0) => {
-  const cats = await getCategories(uid);
+
+// Check if name already taken for this user within the same targetType
+const nameTaken = async (uid, name, targetType = 'image', exceptId = 0) => {
+  const cats = await getCategories(uid, targetType);
   return cats.some((c) => c.id !== exceptId && c.name.toLowerCase() === name.toLowerCase());
 };
 
-
 // Helper: verify a category belongs to this user
 const ownedCat = async (uid, id) => {
-  const [[c]] = await db.query('SELECT id, user_id, name, is_default, pin_hash FROM categories WHERE id=? AND user_id=?', [id, uid]);
+  const [[c]] = await db.query('SELECT id, user_id, name, target_type, is_default, pin_hash FROM categories WHERE id=? AND user_id=?', [id, uid]);
   return c || null;
 };
-
 
 router.get('/', wrap(async (req, res) => {
   // Parse unlocked category IDs from the request header (client session)
@@ -32,19 +31,37 @@ router.get('/', wrap(async (req, res) => {
     (req.headers['x-unlocked-categories'] || '').split(',').map(Number).filter(Boolean)
   );
 
+  const typeFilter = ['image', 'video', 'document'].includes(req.query.type)
+    ? req.query.type
+    : null;
+
+  const where = ['c.user_id=?'];
+  const args = [req.user.id];
+
+  if (typeFilter) {
+    where.push('c.target_type=?');
+    args.push(typeFilter);
+  }
+
   const [rows] = await db.query(
-    `SELECT c.id, c.name, c.is_default AS isDefault, (pin_hash IS NOT NULL) AS hasPin,
-       (SELECT COUNT(*) FROM images i WHERE i.category_id=c.id AND i.user_id=?) AS imageCount
-     FROM categories c WHERE c.user_id=? ORDER BY c.is_default DESC, c.sort_order, c.name`, [req.user.id, req.user.id]);
+    `SELECT c.id, c.name, c.target_type AS targetType, c.is_default AS isDefault, (c.pin_hash IS NOT NULL) AS hasPin,
+       CASE
+         WHEN c.target_type = 'image' THEN (SELECT COUNT(*) FROM images i WHERE i.category_id=c.id AND i.user_id=?)
+         ELSE (SELECT COUNT(*) FROM vault_files vf WHERE vf.category_id=c.id AND vf.user_id=?)
+       END AS imageCount
+     FROM categories c WHERE ${where.join(' AND ')} ORDER BY c.is_default DESC, c.sort_order, c.name`,
+    [req.user.id, req.user.id, ...args]
+  );
 
   const categories = rows.map((r) => {
     const decryptedName = decryptCategory(r.name, req.user.id);
     const isLocked = r.hasPin && !unlockedIds.has(r.id);
     if (isLocked) {
-      // Stealth mode: hide name and image count for PIN-locked categories
+      // Stealth mode: hide name and item count for PIN-locked categories
       return {
         id: r.id,
         name: null,
+        targetType: r.targetType,
         isDefault: r.isDefault,
         hasPin: true,
         masked: true,
@@ -61,32 +78,37 @@ router.get('/', wrap(async (req, res) => {
   res.json({ categories });
 }));
 
-
 router.post('/', wrap(async (req, res) => {
+  const targetType = ['image', 'video', 'document'].includes(req.body.type || req.body.target_type)
+    ? (req.body.type || req.body.target_type)
+    : 'image';
   const name = cleanName(req.body.name);
-  if (await nameTaken(req.user.id, name)) throw new AppError(409, 'You already have a category with that name');
+  if (await nameTaken(req.user.id, name, targetType)) {
+    throw new AppError(409, `You already have a ${targetType} category with that name`);
+  }
   const encName = encryptCategory(name, req.user.id);
-  const [r] = await db.query('INSERT INTO categories (user_id, name) VALUES (?,?)', [req.user.id, encName]);
-  await log(req.user.id, 'category_created', 'New category created');
-  res.status(201).json({ category: { id: r.insertId, name, isDefault: 0, hasPin: false, imageCount: 0 } });
+  const [r] = await db.query('INSERT INTO categories (user_id, target_type, name) VALUES (?,?,?)', [req.user.id, targetType, encName]);
+  await log(req.user.id, 'category_created', `New ${targetType} category created`);
+  res.status(201).json({ category: { id: r.insertId, name, targetType, isDefault: 0, hasPin: false, imageCount: 0 } });
 }));
 
-
 router.patch('/:id', wrap(async (req, res) => {
+  const cat = await ownedCat(req.user.id, +req.params.id);
+  if (!cat) throw new AppError(404, 'Category not found or not yours');
+
   const name = cleanName(req.body.name);
-  if (await nameTaken(req.user.id, name, +req.params.id)) throw new AppError(409, 'You already have a category with that name');
+  if (await nameTaken(req.user.id, name, cat.target_type, +req.params.id)) {
+    throw new AppError(409, 'You already have a category with that name');
+  }
   const encName = encryptCategory(name, req.user.id);
-  // All user categories (including seeded defaults) can be renamed since user owns them
   const [r] = await db.query('UPDATE categories SET name=? WHERE id=? AND user_id=?', [encName, req.params.id, req.user.id]);
   if (!r.affectedRows) throw new AppError(404, 'Category not found or not yours');
   await log(req.user.id, 'category_renamed', 'Category renamed');
   res.json({ ok: true });
 }));
 
-
 router.delete('/:id', wrap(async (req, res) => {
-  // Only the owning user can delete their category
-  const [[cat]] = await db.query('SELECT id, name, pin_hash FROM categories WHERE id=? AND user_id=?', [req.params.id, req.user.id]);
+  const cat = await ownedCat(req.user.id, +req.params.id);
   if (!cat) throw new AppError(404, 'Category not found or not yours');
 
   // 1. Verify User Account Password
@@ -112,16 +134,20 @@ router.delete('/:id', wrap(async (req, res) => {
     }
   }
 
-  // Find user's own "Other" category as fallback destination for images
-  const allCats = await getCategories(req.user.id);
-  const other = allCats.find((c) => c.name.toLowerCase() === 'other' && c.id !== cat.id);
+  // Find user's own fallback category for this specific target_type
+  const allCats = await getCategories(req.user.id, cat.target_type);
+  const other = allCats.find((c) => c.name.toLowerCase().includes('other') && c.id !== cat.id);
   const fallbackCatId = other?.id || allCats.find((c) => c.id !== cat.id)?.id;
 
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
     if (fallbackCatId) {
-      await conn.query('UPDATE images SET category_id=? WHERE category_id=? AND user_id=?', [fallbackCatId, cat.id, req.user.id]);
+      if (cat.target_type === 'image') {
+        await conn.query('UPDATE images SET category_id=? WHERE category_id=? AND user_id=?', [fallbackCatId, cat.id, req.user.id]);
+      } else {
+        await conn.query('UPDATE vault_files SET category_id=? WHERE category_id=? AND user_id=?', [fallbackCatId, cat.id, req.user.id]);
+      }
     }
     await conn.query('DELETE FROM categories WHERE id=? AND user_id=?', [cat.id, req.user.id]);
     await conn.commit();
@@ -129,7 +155,6 @@ router.delete('/:id', wrap(async (req, res) => {
   await log(req.user.id, 'category_deleted', 'Category deleted');
   res.json({ ok: true });
 }));
-
 
 // ── PIN management ────────────────────────────────────────────────────────────
 
@@ -141,7 +166,7 @@ const WEAK_PINS = new Set([
 // In-memory brute-force tracker for PIN verification (per user and category)
 const pinAttempts = new Map(); // key: `${userId}_${catId}` -> { count: number, lockedUntil: number }
 
-// Set or update PIN on a category (user-owned only; default categories can have PINs too)
+// Set or update PIN on a category (user-owned only)
 router.post('/:id/pin', wrap(async (req, res) => {
   const cat = await ownedCat(req.user.id, +req.params.id);
   if (!cat) throw new AppError(404, 'Category not found');
@@ -201,14 +226,20 @@ router.post('/:id/pin/verify', wrap(async (req, res) => {
     throw new AppError(403, `Incorrect password. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining before temporary lockout.`, 'WRONG_PIN');
   }
 
-  // Success: clear failed attempts and reveal the real category name + imageCount
+  // Success: clear failed attempts and reveal the real category name + accurate itemCount
   pinAttempts.delete(lockKey);
   const decryptedName = decryptCategory(cat.name, req.user.id);
-  const [[{ imageCount }]] = await db.query(
-    'SELECT COUNT(*) AS imageCount FROM images WHERE category_id=? AND user_id=?',
-    [cat.id, req.user.id]
-  );
-  res.json({ ok: true, name: decryptedName, imageCount: Number(imageCount) });
+
+  let itemCount = 0;
+  if (cat.target_type === 'image') {
+    const [[r]] = await db.query('SELECT COUNT(*) AS n FROM images WHERE category_id=? AND user_id=?', [cat.id, req.user.id]);
+    itemCount = r.n;
+  } else {
+    const [[r]] = await db.query('SELECT COUNT(*) AS n FROM vault_files WHERE category_id=? AND user_id=?', [cat.id, req.user.id]);
+    itemCount = r.n;
+  }
+
+  res.json({ ok: true, name: decryptedName, targetType: cat.target_type, imageCount: Number(itemCount) });
 }));
 
 module.exports = router;

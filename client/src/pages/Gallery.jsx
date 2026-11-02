@@ -57,7 +57,7 @@ export default function Gallery() {
   }, [f, cats, toast]);
 
   useEffect(() => {
-    categoryService.list().then((r) => setCats(r.categories)).catch(() => {});
+    categoryService.list('image').then((r) => setCats(r.categories)).catch(() => {});
   }, []);
 
   useEffect(() => {

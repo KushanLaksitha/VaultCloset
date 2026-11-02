@@ -14,3 +14,4 @@ export const fileService = {
   setCategory: (id, categoryId) => api.patch(`/files/${id}/category`, { categoryId }),
   remove: (id) => api.del(`/files/${id}`),
 };
+

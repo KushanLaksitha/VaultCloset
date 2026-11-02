@@ -31,19 +31,20 @@ function detectFileType(mimetype, filename) {
 router.post('/upload', upload.array('files', 10), wrap(async (req, res) => {
   if (!req.files?.length) throw new AppError(400, 'No files received');
   const categoryId = +req.body.categoryId;
-  if (!categoryId || !(await categoryAllowed(req.user.id, categoryId))) {
-    throw new AppError(400, 'Invalid category');
-  }
+  if (!categoryId) throw new AppError(400, 'Invalid category');
 
-  const cats = await getCategories(req.user.id);
-  const cat = cats.find((c) => c.id === categoryId);
-  if (!cat) throw new AppError(400, 'Category not found');
+  const [[catRow]] = await db.query(
+    'SELECT id, name, target_type, pin_hash FROM categories WHERE id=? AND user_id=?',
+    [categoryId, req.user.id]
+  );
+  if (!catRow) throw new AppError(400, 'Category not found or not yours');
 
   // Verify PIN if category is locked
-  const [[catRow]] = await db.query('SELECT pin_hash FROM categories WHERE id=? AND user_id=?', [categoryId, req.user.id]);
-  if (catRow?.pin_hash && !getUnlocked(req).includes(categoryId)) {
+  if (catRow.pin_hash && !getUnlocked(req).includes(categoryId)) {
     throw new AppError(403, 'This folder is password protected. Enter PIN to upload.', 'LOCKED_CATEGORY');
   }
+
+  const catName = decryptCategory(catRow.name, req.user.id);
 
   const results = [];
   for (const file of req.files) {
@@ -103,7 +104,7 @@ router.post('/upload', upload.array('files', 10), wrap(async (req, res) => {
         filename,
         status: 'saved',
         fileId: r.insertId,
-        category: cat.name,
+        category: catName,
         fileType,
         size: file.buffer.length,
       });
@@ -340,3 +341,4 @@ router.delete('/:id', wrap(async (req, res) => {
 }));
 
 module.exports = router;
+

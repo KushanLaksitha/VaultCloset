@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { fileService } from '../services/fileService.js';
 import { categoryService } from '../services/categoryService.js';
@@ -6,7 +7,8 @@ import { unlockedStore, fmtBytes, ago } from '../services/api.js';
 import { useApp } from '../context/AppContext.jsx';
 import Modal from '../components/Modal.jsx';
 
-const ACCEPTED_TYPES = 'video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z';
+const VIDEO_ACCEPT = 'video/*,.mp4,.webm,.mov,.mkv,.avi,.3gp,.m4v';
+const DOC_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z';
 
 function getFileIcon(filename, type) {
   const ext = (filename.split('.').pop() || '').toLowerCase();
@@ -24,17 +26,29 @@ function getFileIcon(filename, type) {
 
 export default function Files() {
   const { toast } = useApp();
-  const [categories, setCategories] = useState([]);
+  const [searchParams] = useSearchParams();
+
+  // Categories separated by target type
+  const [videoCategories, setVideoCategories] = useState([]);
+  const [docCategories, setDocCategories] = useState([]);
+
   const [files, setFiles] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
   // Filters
-  const [f, setF] = useState({ q: '', category: '', type: '', favorite: false, sort: 'newest' });
+  const [f, setF] = useState({
+    q: '',
+    category: searchParams.get('category') || '',
+    type: searchParams.get('type') || '', // '' | 'video' | 'document'
+    favorite: false,
+    sort: 'newest',
+  });
 
-  // Upload state
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [selectedCatId, setSelectedCatId] = useState('');
+  // Upload drawer state
+  const [uploadOpen, setUploadOpen] = useState(searchParams.get('upload') === '1');
+  const [uploadType, setUploadType] = useState(searchParams.get('type') === 'document' ? 'document' : 'video'); // 'video' | 'document'
+  const [selectedCatId, setSelectedCatId] = useState(searchParams.get('category') || '');
   const [queue, setQueue] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -60,22 +74,36 @@ export default function Files() {
     return () => window.removeEventListener('vc:unlocked-change', onUnlockedChange);
   }, []);
 
-  // Load categories
+  // Load video and document categories separately
   const loadCategories = useCallback(() => {
-    categoryService
-      .list()
-      .then((r) => {
-        setCategories(r.categories || []);
-        if (!selectedCatId && r.categories?.length) {
-          setSelectedCatId(String(r.categories[0].id));
+    Promise.all([categoryService.list('video'), categoryService.list('document')])
+      .then(([vRes, dRes]) => {
+        const vCats = vRes.categories || [];
+        const dCats = dRes.categories || [];
+        setVideoCategories(vCats);
+        setDocCategories(dCats);
+
+        // Auto-select initial category if none selected
+        if (!selectedCatId) {
+          const list = uploadType === 'video' ? vCats : dCats;
+          if (list.length) setSelectedCatId(String(list[0].id));
         }
       })
       .catch(() => {});
-  }, [selectedCatId]);
+  }, [selectedCatId, uploadType]);
 
   useEffect(() => {
     loadCategories();
   }, [loadCategories]);
+
+  // When uploadType toggles, set selectedCatId to first category of that type
+  const handleUploadTypeChange = (nextType) => {
+    setUploadType(nextType);
+    const list = nextType === 'video' ? videoCategories : docCategories;
+    if (list.length) setSelectedCatId(String(list[0].id));
+  };
+
+  const allFileCategories = [...videoCategories, ...docCategories];
 
   // Load files
   const loadFiles = useCallback(async () => {
@@ -86,7 +114,7 @@ export default function Files() {
       setTotal(res.total || 0);
     } catch (err) {
       if (err.code === 'LOCKED_CATEGORY' && f.category) {
-        const cat = categories.find((c) => String(c.id) === String(f.category));
+        const cat = allFileCategories.find((c) => String(c.id) === String(f.category));
         setPinModal({ catId: f.category, catName: cat?.name || 'Folder', masked: !!cat?.masked });
       } else {
         toast(err.message || 'Failed to load files', 'err');
@@ -94,7 +122,7 @@ export default function Files() {
     } finally {
       setLoading(false);
     }
-  }, [f, categories, toast]);
+  }, [f, allFileCategories, toast]);
 
   useEffect(() => {
     const timer = setTimeout(loadFiles, 200);
@@ -107,7 +135,7 @@ export default function Files() {
       setF((prev) => ({ ...prev, category: '' }));
       return;
     }
-    const cat = categories.find((c) => String(c.id) === String(catIdStr));
+    const cat = allFileCategories.find((c) => String(c.id) === String(catIdStr));
     if ((cat?.masked || cat?.hasPin) && !unlockedStore.has(cat.id)) {
       setPinModal({ catId: cat.id, catName: cat.name, masked: !!cat.masked });
       return;
@@ -144,7 +172,7 @@ export default function Files() {
       file,
       name: file.name,
       size: file.size,
-      status: 'ready', // ready | uploading | saved | failed | duplicate
+      status: 'ready',
       message: '',
     }));
     setQueue((prev) => [...prev, ...newItems]);
@@ -161,7 +189,7 @@ export default function Files() {
       return;
     }
 
-    const selectedCat = categories.find((c) => String(c.id) === String(selectedCatId));
+    const selectedCat = allFileCategories.find((c) => String(c.id) === String(selectedCatId));
     if ((selectedCat?.masked || selectedCat?.hasPin) && !unlockedStore.has(selectedCat.id)) {
       setPinModal({ catId: selectedCat.id, catName: selectedCat.name, masked: !!selectedCat.masked });
       return;
@@ -249,7 +277,8 @@ export default function Files() {
     }
   };
 
-  const selectedCategoryObj = categories.find((c) => String(c.id) === String(selectedCatId));
+  const uploadCategoriesList = uploadType === 'video' ? videoCategories : docCategories;
+  const selectedCategoryObj = uploadCategoriesList.find((c) => String(c.id) === String(selectedCatId));
   const isSelectedCatLocked = (selectedCategoryObj?.masked || selectedCategoryObj?.hasPin) && !unlockedStore.has(selectedCategoryObj.id);
 
   return (
@@ -260,7 +289,7 @@ export default function Files() {
             Files Vault <span className="muted small">{total} files</span>
           </h1>
           <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>
-            Encrypted videos and documents. Zero AI safety scans. Direct AES-256 vault storage.
+            Separate folders for videos and documents. Zero AI scans. Encrypted with AES-256.
           </p>
         </div>
         <button
@@ -282,51 +311,75 @@ export default function Files() {
             exit={{ opacity: 0, height: 0 }}
             style={{ overflow: 'hidden', marginBottom: '22px' }}
           >
-            <div className="glass pad" style={{ borderLeft: '4px solid #6bbde3' }}>
+            <div className="glass pad" style={{ borderLeft: uploadType === 'video' ? '4px solid var(--rose)' : '4px solid #6bbde3' }}>
               <div className="row" style={{ justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
                 <div>
-                  <b style={{ fontSize: '1.05rem', color: '#6bbde3' }}>📁 Direct File Upload (Zero AI Scan)</b>
+                  <b style={{ fontSize: '1.05rem', color: uploadType === 'video' ? 'var(--rose)' : '#6bbde3' }}>
+                    📁 Direct File Upload (No AI Scan)
+                  </b>
                   <p className="muted small" style={{ margin: '4px 0 0' }}>
-                    Videos and documents are encrypted directly into your selected category folder without AI scanning.
+                    {uploadType === 'video'
+                      ? 'Videos are saved directly into your selected Video Folder.'
+                      : 'Documents are saved directly into your selected Document Folder.'}
                   </p>
                 </div>
 
-                <div className="row" style={{ gap: '10px' }}>
-                  <label style={{ fontWeight: 600, fontSize: '0.9rem' }}>Choose Folder:</label>
-                  <select
-                    value={selectedCatId}
-                    onChange={(e) => setSelectedCatId(e.target.value)}
-                    style={{ padding: '8px 12px', minWidth: '170px' }}
-                  >
-                    {categories.map((c) => {
-                      const rev = unlockedStore.getName(c.id);
-                      const label = c.masked && !rev ? '🔒 Hidden' : (c.hasPin ? '🔒 ' : '') + (rev?.name || c.name);
-                      return (
-                        <option key={c.id} value={c.id}>
-                          {label}
-                        </option>
-                      );
-                    })}
-                  </select>
-
-                  {selectedCategoryObj?.hasPin && (
-                    <span
-                      className="badge"
-                      style={{
-                        background: isSelectedCatLocked ? 'rgba(239, 122, 122, 0.2)' : 'rgba(143, 211, 176, 0.2)',
-                        color: isSelectedCatLocked ? 'var(--danger)' : 'var(--ok)',
-                      }}
+                {/* Upload Destination Type Selector: Video vs Document */}
+                <div className="row" style={{ gap: '12px', flexWrap: 'wrap' }}>
+                  <div className="seg">
+                    <button
+                      type="button"
+                      className={uploadType === 'video' ? 'on' : ''}
+                      onClick={() => handleUploadTypeChange('video')}
                     >
-                      {isSelectedCatLocked ? '🔒 Password Locked' : '🔓 Unlocked'}
-                    </span>
-                  )}
+                      🎬 Video Folder
+                    </button>
+                    <button
+                      type="button"
+                      className={uploadType === 'document' ? 'on' : ''}
+                      onClick={() => handleUploadTypeChange('document')}
+                    >
+                      📄 Document Folder
+                    </button>
+                  </div>
+
+                  {/* Category Dropdown (Filtered strictly by uploadType!) */}
+                  <div className="row" style={{ gap: '6px' }}>
+                    <select
+                      value={selectedCatId}
+                      onChange={(e) => setSelectedCatId(e.target.value)}
+                      style={{ padding: '8px 12px', minWidth: '180px' }}
+                    >
+                      {uploadCategoriesList.map((c) => {
+                        const rev = unlockedStore.getName(c.id);
+                        const label = c.masked && !rev ? '🔒 Hidden' : (c.hasPin ? '🔒 ' : '') + (rev?.name || c.name);
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {label}
+                          </option>
+                        );
+                      })}
+                    </select>
+
+                    {selectedCategoryObj?.hasPin && (
+                      <span
+                        className="badge"
+                        style={{
+                          background: isSelectedCatLocked ? 'rgba(239, 122, 122, 0.2)' : 'rgba(143, 211, 176, 0.2)',
+                          color: isSelectedCatLocked ? 'var(--danger)' : 'var(--ok)',
+                        }}
+                      >
+                        {isSelectedCatLocked ? '🔒 Locked' : '🔓 Unlocked'}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
               {/* Drag and Drop Box */}
               <div
                 className={'drop glass' + (drag ? ' over' : '')}
-                style={{ padding: '36px 16px', margin: '14px 0' }}
+                style={{ padding: '34px 16px', margin: '14px 0' }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDrag(true);
@@ -345,7 +398,7 @@ export default function Files() {
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept={ACCEPTED_TYPES}
+                  accept={uploadType === 'video' ? VIDEO_ACCEPT : DOC_ACCEPT}
                   hidden
                   onChange={(e) => {
                     if (e.target.files?.length) {
@@ -354,10 +407,16 @@ export default function Files() {
                     }
                   }}
                 />
-                <div style={{ fontSize: '2.4rem', marginBottom: '8px' }}>📂</div>
-                <h3 style={{ margin: '0 0 6px' }}>Click to choose files or drag &amp; drop here</h3>
+                <div style={{ fontSize: '2.4rem', marginBottom: '8px' }}>
+                  {uploadType === 'video' ? '🎬' : '📄'}
+                </div>
+                <h3 style={{ margin: '0 0 6px' }}>
+                  Click to select {uploadType === 'video' ? 'videos' : 'documents'} or drag &amp; drop
+                </h3>
                 <p className="muted small" style={{ margin: 0 }}>
-                  Supports MP4, WEBM, MOV, MKV, AVI, PDF, DOCX, XLSX, PPTX, TXT, CSV, ZIP (up to 500 MB)
+                  {uploadType === 'video'
+                    ? 'MP4, WEBM, MOV, MKV, AVI, 3GP (up to 500 MB)'
+                    : 'PDF, DOCX, XLSX, PPTX, TXT, CSV, ZIP, RAR, 7Z (up to 500 MB)'}
                 </p>
               </div>
 
@@ -391,7 +450,7 @@ export default function Files() {
                           borderRadius: '10px',
                         }}
                       >
-                        <span style={{ fontSize: '1.4rem' }}>{getFileIcon(item.name, '')}</span>
+                        <span style={{ fontSize: '1.4rem' }}>{getFileIcon(item.name, uploadType)}</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {item.name}
@@ -448,45 +507,101 @@ export default function Files() {
           onChange={(e) => setF({ ...f, q: e.target.value })}
         />
 
-        {/* Type Segments */}
+        {/* Type Segments: All | Videos | Documents */}
         <div className="seg">
           <button
             type="button"
             className={f.type === '' ? 'on' : ''}
-            onClick={() => setF({ ...f, type: '' })}
+            onClick={() => setF({ ...f, type: '', category: '' })}
           >
             All Files
           </button>
           <button
             type="button"
             className={f.type === 'video' ? 'on' : ''}
-            onClick={() => setF({ ...f, type: 'video' })}
+            onClick={() => setF({ ...f, type: 'video', category: '' })}
           >
             🎬 Videos
           </button>
           <button
             type="button"
             className={f.type === 'document' ? 'on' : ''}
-            onClick={() => setF({ ...f, type: 'document' })}
+            onClick={() => setF({ ...f, type: 'document', category: '' })}
           >
             📄 Documents
           </button>
         </div>
 
-        {/* Category Filter */}
+        {/* Category Filter — strictly separated by type! */}
         <select value={f.category} onChange={(e) => handleCategoryFilterChange(e.target.value)}>
           <option value="">All folders</option>
-          {categories.map((c) => {
-            const revName = unlockedStore.getName(c.id);
-            const displayLabel = c.masked && !revName
-              ? '🔒 Hidden'
-              : (c.hasPin ? (unlockedStore.has(c.id) ? '🔓 ' : '🔒 ') : '') + (revName?.name || c.name);
-            return (
-              <option key={c.id} value={c.id}>
-                {displayLabel}
-              </option>
-            );
-          })}
+
+          {/* If video filter active: show only video categories */}
+          {f.type === 'video' && (
+            videoCategories.map((c) => {
+              const revName = unlockedStore.getName(c.id);
+              const displayLabel = c.masked && !revName
+                ? '🔒 Hidden'
+                : (c.hasPin ? (unlockedStore.has(c.id) ? '🔓 ' : '🔒 ') : '') + (revName?.name || c.name);
+              return (
+                <option key={c.id} value={c.id}>
+                  {displayLabel}
+                </option>
+              );
+            })
+          )}
+
+          {/* If document filter active: show only document categories */}
+          {f.type === 'document' && (
+            docCategories.map((c) => {
+              const revName = unlockedStore.getName(c.id);
+              const displayLabel = c.masked && !revName
+                ? '🔒 Hidden'
+                : (c.hasPin ? (unlockedStore.has(c.id) ? '🔓 ' : '🔒 ') : '') + (revName?.name || c.name);
+              return (
+                <option key={c.id} value={c.id}>
+                  {displayLabel}
+                </option>
+              );
+            })
+          )}
+
+          {/* If all files: show video folders and document folders grouped cleanly */}
+          {f.type === '' && (
+            <>
+              {videoCategories.length > 0 && (
+                <optgroup label="🎬 Video Folders">
+                  {videoCategories.map((c) => {
+                    const revName = unlockedStore.getName(c.id);
+                    const displayLabel = c.masked && !revName
+                      ? '🔒 Hidden'
+                      : (c.hasPin ? (unlockedStore.has(c.id) ? '🔓 ' : '🔒 ') : '') + (revName?.name || c.name);
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {displayLabel}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              )}
+
+              {docCategories.length > 0 && (
+                <optgroup label="📄 Document Folders">
+                  {docCategories.map((c) => {
+                    const revName = unlockedStore.getName(c.id);
+                    const displayLabel = c.masked && !revName
+                      ? '🔒 Hidden'
+                      : (c.hasPin ? (unlockedStore.has(c.id) ? '🔓 ' : '🔒 ') : '') + (revName?.name || c.name);
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {displayLabel}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              )}
+            </>
+          )}
         </select>
 
         {/* Sort */}
@@ -515,12 +630,14 @@ export default function Files() {
         </div>
       ) : files.length === 0 ? (
         <div className="empty glass pad">
-          <div style={{ fontSize: '3rem', marginBottom: '12px' }}>📂</div>
-          <h3>No files found</h3>
+          <div style={{ fontSize: '3rem', marginBottom: '12px' }}>
+            {f.type === 'video' ? '🎬' : f.type === 'document' ? '📄' : '📂'}
+          </div>
+          <h3>No {f.type === 'video' ? 'videos' : f.type === 'document' ? 'documents' : 'files'} found</h3>
           <p className="muted small" style={{ maxWidth: '400px', margin: '0 auto 16px' }}>
-            {f.q || f.category || f.type || f.favorite
+            {f.q || f.category || f.favorite
               ? 'No files match your current filter settings.'
-              : 'Your file vault is currently empty. Upload videos, documents, and archives safely without AI scans.'}
+              : 'This section is currently empty. Upload files safely into your dedicated folders without AI scans.'}
           </p>
           <button
             type="button"
@@ -699,7 +816,7 @@ export default function Files() {
       >
         <form onSubmit={handlePinUnlock} style={{ display: 'grid', gap: '14px' }}>
           <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-            This folder is protected. Enter its password to reveal and access its files.
+            This folder is protected. Enter its password to reveal and access its contents.
           </p>
           <label className="lbl" style={{ margin: 0 }}>
             Folder Password

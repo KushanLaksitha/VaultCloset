@@ -62,17 +62,45 @@ router.post('/register', wrap(async (req, res) => {
   });
   const uid = r.insertId;
 
-  // Seed default categories for the new user (fully owned — can rename/delete freely)
-  const defaults = [
+  // Seed default categories for the new user (Photos, Videos, and Documents)
+  const imageDefaults = [
     ['Frocks', 1],
     ['Shorts & T-Shirts', 2],
     ['Trousers & Blouses', 3],
     ['Other', 4],
   ];
-  for (const [catName, sortOrder] of defaults) {
+  for (const [catName, sortOrder] of imageDefaults) {
     const encName = encryptCategory(catName, uid);
     await db.query(
-      'INSERT IGNORE INTO categories (user_id, name, is_default, sort_order) VALUES (?,?,1,?)',
+      "INSERT INTO categories (user_id, target_type, name, is_default, sort_order) VALUES (?,'image',?,1,?)",
+      [uid, encName, sortOrder]
+    ).catch(() => {});
+  }
+
+  const videoDefaults = [
+    ['Movies', 1],
+    ['Clips', 2],
+    ['Personal Videos', 3],
+    ['Other Videos', 4],
+  ];
+  for (const [catName, sortOrder] of videoDefaults) {
+    const encName = encryptCategory(catName, uid);
+    await db.query(
+      "INSERT INTO categories (user_id, target_type, name, is_default, sort_order) VALUES (?,'video',?,1,?)",
+      [uid, encName, sortOrder]
+    ).catch(() => {});
+  }
+
+  const docDefaults = [
+    ['Personal Documents', 1],
+    ['Work & Projects', 2],
+    ['Financial & Bills', 3],
+    ['Other Documents', 4],
+  ];
+  for (const [catName, sortOrder] of docDefaults) {
+    const encName = encryptCategory(catName, uid);
+    await db.query(
+      "INSERT INTO categories (user_id, target_type, name, is_default, sort_order) VALUES (?,'document',?,1,?)",
       [uid, encName, sortOrder]
     ).catch(() => {});
   }

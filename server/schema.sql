@@ -16,12 +16,14 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS categories (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id BIGINT UNSIGNED NULL,
+  target_type ENUM('image', 'video', 'document') NOT NULL DEFAULT 'image',
   name VARCHAR(255) NOT NULL,
   is_default TINYINT(1) NOT NULL DEFAULT 0,
   sort_order INT NOT NULL DEFAULT 100,
+  pin_hash VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_user_cat (user_id, name),
+  KEY idx_cat_user_type (user_id, target_type),
   CONSTRAINT fk_cat_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 

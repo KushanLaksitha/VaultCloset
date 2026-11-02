@@ -124,7 +124,7 @@ export default function Upload() {
   // Load categories
   useEffect(() => {
     categoryService
-      .list()
+      .list('image')
       .then((r) => {
         setCategories(r.categories);
         if (!selectedCatId && r.categories.length) {

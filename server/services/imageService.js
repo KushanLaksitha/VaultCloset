@@ -9,13 +9,22 @@ const { AppError } = require('../utils/errors');
 const log = (userId, action, detail) =>
   db.query('INSERT INTO activity_logs (user_id, action, detail) VALUES (?,?,?)', [userId, action, String(detail).slice(0, 255)]).catch(() => {});
 
-const getCategories = async (userId) => {
-  const [rows] = await db.query('SELECT id, name FROM categories WHERE user_id=?', [userId]);
+const getCategories = async (userId, targetType = 'image') => {
+  const query = targetType && targetType !== 'all'
+    ? 'SELECT id, name, target_type, pin_hash FROM categories WHERE user_id=? AND target_type=?'
+    : 'SELECT id, name, target_type, pin_hash FROM categories WHERE user_id=?';
+  const args = targetType && targetType !== 'all' ? [userId, targetType] : [userId];
+  const [rows] = await db.query(query, args);
   return rows.map((r) => ({ ...r, name: decryptCategory(r.name, userId) }));
 };
 
-const categoryAllowed = async (userId, id) =>
-  (await db.query('SELECT id FROM categories WHERE id=? AND user_id=?', [id, userId]))[0].length > 0;
+const categoryAllowed = async (userId, id, targetType = null) => {
+  const query = targetType
+    ? 'SELECT id FROM categories WHERE id=? AND user_id=? AND target_type=?'
+    : 'SELECT id FROM categories WHERE id=? AND user_id=?';
+  const args = targetType ? [id, userId, targetType] : [id, userId];
+  return (await db.query(query, args))[0].length > 0;
+};
 
 
 async function saveApproved({ userId, buffer, filename, categoryId, approvalSource, categorySource, info, hash, ai, aiVerdict }) {
