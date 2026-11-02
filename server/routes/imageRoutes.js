@@ -5,7 +5,7 @@ const storage = require('../services/storageService');
 const upload = require('../middleware/uploadMiddleware');
 const requireAuth = require('../middleware/authMiddleware');
 const { inspect, makeAiSample } = require('../services/imageProcessingService');
-const { sha256 } = require('../services/encryptionService');
+const { sha256, decryptCategory } = require('../services/encryptionService');
 const { getProvider, AiError } = require('../services/aiService');
 const svc = require('../services/imageService');
 const { signMedia } = require('../utils/tokens');
@@ -29,13 +29,14 @@ async function processOne(userId, file, cats) {
       [userId, hash]
     );
     if (dup.length) {
+      const catName = decryptCategory(dup[0].category_name, userId);
       return {
         filename,
         status: 'approved',
         duplicate: true,
         imageId: dup[0].id,
-        category: dup[0].category_name,
-        message: `Already in your collection in “${dup[0].category_name}” (Source removed)`,
+        category: catName,
+        message: `Already in your collection in “${catName}” (Source removed)`,
       };
     }
 
@@ -58,7 +59,7 @@ async function processOne(userId, file, cats) {
     const cat = cats.find((c) => c.name === ai.category) || cats.find((c) => c.name === 'Other');
     const imageId = await svc.saveApproved({ userId, buffer: file.buffer, filename, categoryId: cat.id, approvalSource: 'ai',
       categorySource: 'ai', info, hash, ai, aiVerdict: 'approved' });
-    await svc.log(userId, 'image_added', `${filename} → ${cat.name}`);
+    await svc.log(userId, 'image_added', filename);
     return { filename, status: 'approved', imageId, category: cat.name, ai };
   } catch (e) {
     if (e instanceof AppError || e instanceof AiError) return { filename, status: e.code === 'DUPLICATE' ? 'duplicate' : 'failed', message: e.message };
@@ -91,7 +92,11 @@ router.post('/check-duplicates', wrap(async (req, res) => {
        WHERE i.user_id=? AND i.content_hash IN (?)`,
       [req.user.id, hashes]
     );
-    duplicates = rows.map((r) => ({ ...r, matchedBy: 'content_hash' }));
+    duplicates = rows.map((r) => ({
+      ...r,
+      categoryName: decryptCategory(r.categoryName, req.user.id),
+      matchedBy: 'content_hash',
+    }));
   }
 
   res.json({ duplicates });
@@ -149,13 +154,14 @@ router.post('/upload-manual', upload.array('files', 10), wrap(async (req, res) =
         [req.user.id, hash]
       );
       if (dup.length) {
+        const catName = decryptCategory(dup[0].category_name, req.user.id);
         results.push({
           filename,
           status: 'approved',
           duplicate: true,
           imageId: dup[0].id,
-          category: dup[0].category_name,
-          message: `Already in your collection in “${dup[0].category_name}” (Source removed)`,
+          category: catName,
+          message: `Already in your collection in “${catName}” (Source removed)`,
         });
         continue;
       }
@@ -164,7 +170,7 @@ router.post('/upload-manual', upload.array('files', 10), wrap(async (req, res) =
         categoryId, approvalSource: 'manual', categorySource: 'manual',
         info, hash, ai: { provider: 'none', category: cat.name, confidence: 1, reason: 'Manual upload', explicit: false, labels: [] }, aiVerdict: 'approved',
       });
-      await svc.log(req.user.id, 'manually_approved', `${filename} → ${cat.name}`);
+      await svc.log(req.user.id, 'manually_approved', `${filename}`);
       results.push({ filename, status: 'approved', imageId, category: cat.name });
     } catch (e) {
       if (e instanceof AppError || e instanceof AiError) results.push({ filename, status: e.code === 'DUPLICATE' ? 'duplicate' : 'failed', message: e.message });
@@ -220,7 +226,8 @@ router.post('/import-local-folder', wrap(async (req, res) => {
           [req.user.id, hash]
         );
         if (dup.length) {
-          r = { filename, status: 'approved', duplicate: true, category: dup[0].category_name, message: 'Already in collection (Source removed)' };
+          const catName = decryptCategory(dup[0].category_name, req.user.id);
+          r = { filename, status: 'approved', duplicate: true, category: catName, message: 'Already in collection (Source removed)' };
         } else {
           const imageId = await svc.saveApproved({
             userId: req.user.id, buffer, filename: safeName(filename),
@@ -303,11 +310,12 @@ router.get('/stats', wrap(async (req, res) => {
   const [byCategory] = await db.query(
     `SELECT c.name, COUNT(i.id) count FROM categories c LEFT JOIN images i ON i.category_id=c.id AND i.user_id=?
      WHERE c.user_id=? GROUP BY c.id ORDER BY count DESC LIMIT 8`, [u, u]);
+  const decryptedByCategory = byCategory.map((b) => ({ ...b, name: decryptCategory(b.name, u) }));
 
   const [recent] = await db.query('SELECT id, original_filename FROM images WHERE user_id=? ORDER BY created_at DESC LIMIT 8', [u]);
   const [activity] = await db.query('SELECT action, detail, created_at FROM activity_logs WHERE user_id=? ORDER BY id DESC LIMIT 8', [u]);
   res.json({ total: t.total, storageBytes: Number(t.bytes), favorites: Number(t.favorites), categories: c.n, rejected: rj.n,
-    byCategory, recent: recent.map(withThumb(u)), activity });
+    byCategory: decryptedByCategory, recent: recent.map(withThumb(u)), activity });
 }));
 
 // ---------- List / search / filter ----------
@@ -347,7 +355,15 @@ router.get('/', wrap(async (req, res) => {
      i.approval_source AS approval, i.category_source AS catSource, i.file_size AS size, i.width, i.height, i.created_at AS createdAt,
      a.suggested_category AS aiCategory, a.confidence ${from_} ORDER BY ${order} LIMIT ? OFFSET ?`, [...args, limit, offset]);
   const [[{ total }]] = await db.query(`SELECT COUNT(*) total ${from_}`, args);
-  res.json({ images: rows.map(withThumb(req.user.id)), total, page: offset / limit + 1, limit });
+  res.json({
+    images: rows.map((r) => ({
+      ...withThumb(req.user.id)(r),
+      categoryName: decryptCategory(r.categoryName, req.user.id),
+    })),
+    total,
+    page: offset / limit + 1,
+    limit,
+  });
 }));
 
 // ---------- Bulk actions ----------
@@ -389,6 +405,7 @@ router.get('/:id', wrap(async (req, res) => {
     throw new AppError(403, 'This image is inside a password protected category', 'LOCKED_CATEGORY');
   }
   delete r.catPinHash;
+  r.categoryName = decryptCategory(r.categoryName, req.user.id);
   res.json({ image: r });
 }));
 // A 60-second, single-purpose link used by the secure viewer. Fetch a new one each time an image opens.

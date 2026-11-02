@@ -1,7 +1,7 @@
 // Shared by "upload" and "manual approve": encrypt -> store files -> write metadata.
 const db = require('../config/db');
 const storage = require('./storageService');
-const { newVault } = require('./encryptionService');
+const { newVault, decryptCategory } = require('./encryptionService');
 const { makeThumb, sanitizeImageBuffer, storeFormat } = require('./imageProcessingService');
 const { AppError } = require('../utils/errors');
 
@@ -9,8 +9,10 @@ const { AppError } = require('../utils/errors');
 const log = (userId, action, detail) =>
   db.query('INSERT INTO activity_logs (user_id, action, detail) VALUES (?,?,?)', [userId, action, String(detail).slice(0, 255)]).catch(() => {});
 
-const getCategories = async (userId) =>
-  (await db.query('SELECT id, name FROM categories WHERE user_id=?', [userId]))[0];
+const getCategories = async (userId) => {
+  const [rows] = await db.query('SELECT id, name FROM categories WHERE user_id=?', [userId]);
+  return rows.map((r) => ({ ...r, name: decryptCategory(r.name, userId) }));
+};
 
 const categoryAllowed = async (userId, id) =>
   (await db.query('SELECT id FROM categories WHERE id=? AND user_id=?', [id, userId]))[0].length > 0;
@@ -108,7 +110,7 @@ async function retryPending(userId, pendingId, provider, cats) {
       categoryId: cat.id, approvalSource: 'ai', categorySource: 'ai',
       info, hash: row.content_hash, ai, aiVerdict: 'approved',
     });
-    await log(userId, 'image_added', `${row.original_filename} → ${cat.name} (retry)`);
+    await log(userId, 'image_added', `${row.original_filename} (retry)`);
     result = { status: 'approved', imageId, category: cat.name, ai };
   }
 

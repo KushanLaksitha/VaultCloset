@@ -38,6 +38,7 @@
 - **Metadata Scrubbing**: Re-encodes all uploads to strip GPS coordinates, camera serials, and device fingerprints.
 
 ### 📁 4. User-Owned Folders & 2-Factor Folder Security
+- **Zero-Knowledge Category Name Encryption**: Category names are encrypted in MySQL using user-bound AES-256-GCM. An attacker with database access or a username cannot discover or enumerate what categories/folders the user owns.
 - **Fully Customizable Categories**: Clean, per-user owned categories. Rename, delete, and organize folders freely without global restrictions.
 - **Category PIN / Password Lock**: Lock sensitive folders with a separate password. Includes folder-level brute-force lockout (5 attempts -> 10-minute folder lock).
 - **2-Factor Category Deletion**: Deleting a protected folder requires **both** the User Account Password **and** the Category Password to prevent accidental or unauthorized loss. Images inside are automatically transferred to a safe fallback folder.

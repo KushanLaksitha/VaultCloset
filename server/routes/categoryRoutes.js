@@ -3,7 +3,8 @@ const db = require('../config/db');
 const bcrypt = require('bcryptjs');
 const requireAuth = require('../middleware/authMiddleware');
 const { AppError, wrap } = require('../utils/errors');
-const { log } = require('../services/imageService');
+const { log, getCategories } = require('../services/imageService');
+const { encryptCategory, decryptCategory } = require('../services/encryptionService');
 router.use(requireAuth);
 
 const cleanName = (v) => {
@@ -12,8 +13,10 @@ const cleanName = (v) => {
   return n;
 };
 // Check if name already taken for this specific user
-const nameTaken = async (uid, name, exceptId = 0) =>
-  (await db.query('SELECT id FROM categories WHERE user_id=? AND LOWER(name)=LOWER(?) AND id<>?', [uid, name, exceptId]))[0].length > 0;
+const nameTaken = async (uid, name, exceptId = 0) => {
+  const cats = await getCategories(uid);
+  return cats.some((c) => c.id !== exceptId && c.name.toLowerCase() === name.toLowerCase());
+};
 
 
 // Helper: verify a category belongs to this user
@@ -28,15 +31,20 @@ router.get('/', wrap(async (req, res) => {
     `SELECT c.id, c.name, c.is_default AS isDefault, (pin_hash IS NOT NULL) AS hasPin,
        (SELECT COUNT(*) FROM images i WHERE i.category_id=c.id AND i.user_id=?) AS imageCount
      FROM categories c WHERE c.user_id=? ORDER BY c.is_default DESC, c.sort_order, c.name`, [req.user.id, req.user.id]);
-  res.json({ categories: rows });
+  const categories = rows.map((r) => ({
+    ...r,
+    name: decryptCategory(r.name, req.user.id),
+  }));
+  res.json({ categories });
 }));
 
 
 router.post('/', wrap(async (req, res) => {
   const name = cleanName(req.body.name);
   if (await nameTaken(req.user.id, name)) throw new AppError(409, 'You already have a category with that name');
-  const [r] = await db.query('INSERT INTO categories (user_id, name) VALUES (?,?)', [req.user.id, name]);
-  await log(req.user.id, 'category_created', name);
+  const encName = encryptCategory(name, req.user.id);
+  const [r] = await db.query('INSERT INTO categories (user_id, name) VALUES (?,?)', [req.user.id, encName]);
+  await log(req.user.id, 'category_created', 'New category created');
   res.status(201).json({ category: { id: r.insertId, name, isDefault: 0, hasPin: false, imageCount: 0 } });
 }));
 
@@ -44,9 +52,11 @@ router.post('/', wrap(async (req, res) => {
 router.patch('/:id', wrap(async (req, res) => {
   const name = cleanName(req.body.name);
   if (await nameTaken(req.user.id, name, +req.params.id)) throw new AppError(409, 'You already have a category with that name');
+  const encName = encryptCategory(name, req.user.id);
   // All user categories (including seeded defaults) can be renamed since user owns them
-  const [r] = await db.query('UPDATE categories SET name=? WHERE id=? AND user_id=?', [name, req.params.id, req.user.id]);
+  const [r] = await db.query('UPDATE categories SET name=? WHERE id=? AND user_id=?', [encName, req.params.id, req.user.id]);
   if (!r.affectedRows) throw new AppError(404, 'Category not found or not yours');
+  await log(req.user.id, 'category_renamed', 'Category renamed');
   res.json({ ok: true });
 }));
 
@@ -80,20 +90,9 @@ router.delete('/:id', wrap(async (req, res) => {
   }
 
   // Find user's own "Other" category as fallback destination for images
-  const [[other]] = await db.query(
-    "SELECT id FROM categories WHERE user_id=? AND LOWER(name)='other' AND id<>? LIMIT 1",
-    [req.user.id, cat.id]
-  );
-
-  // If no "Other" exists (user deleted it too), pick any remaining category
-  let fallbackCatId = other?.id;
-  if (!fallbackCatId) {
-    const [[any]] = await db.query(
-      'SELECT id FROM categories WHERE user_id=? AND id<>? LIMIT 1',
-      [req.user.id, cat.id]
-    );
-    fallbackCatId = any?.id;
-  }
+  const allCats = await getCategories(req.user.id);
+  const other = allCats.find((c) => c.name.toLowerCase() === 'other' && c.id !== cat.id);
+  const fallbackCatId = other?.id || allCats.find((c) => c.id !== cat.id)?.id;
 
   const conn = await db.getConnection();
   try {
@@ -104,7 +103,7 @@ router.delete('/:id', wrap(async (req, res) => {
     await conn.query('DELETE FROM categories WHERE id=? AND user_id=?', [cat.id, req.user.id]);
     await conn.commit();
   } catch (e) { await conn.rollback(); throw e; } finally { conn.release(); }
-  await log(req.user.id, 'category_deleted', cat.name);
+  await log(req.user.id, 'category_deleted', 'Category deleted');
   res.json({ ok: true });
 }));
 

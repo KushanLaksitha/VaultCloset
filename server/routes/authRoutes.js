@@ -6,6 +6,7 @@ const requireAuth = require('../middleware/authMiddleware');
 const { signSession } = require('../utils/tokens');
 const { AppError, wrap } = require('../utils/errors');
 const { log } = require('../services/imageService');
+const { encryptCategory } = require('../services/encryptionService');
 
 const cookieOpts = { httpOnly: true, sameSite: 'lax', secure: env.prod, maxAge: env.sessionHours * 3600e3 };
 const publicUser = (u) => ({ id: u.id, username: u.username, displayName: u.display_name, email: u.email });
@@ -69,9 +70,10 @@ router.post('/register', wrap(async (req, res) => {
     ['Other', 4],
   ];
   for (const [catName, sortOrder] of defaults) {
+    const encName = encryptCategory(catName, uid);
     await db.query(
       'INSERT IGNORE INTO categories (user_id, name, is_default, sort_order) VALUES (?,?,1,?)',
-      [uid, catName, sortOrder]
+      [uid, encName, sortOrder]
     ).catch(() => {});
   }
 
