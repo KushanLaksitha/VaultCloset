@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { imageService } from '../services/imageService.js';
-import { fmtBytes, ago } from '../services/api.js';
+import { fmtBytes } from '../services/api.js';
 import useCountUp from '../hooks/useCountUp.js';
 import { useApp } from '../context/AppContext.jsx';
-import SecureImage from '../components/SecureImage.jsx';
 
 function Stat({ label, value, text, icon, to }) {
   const n = useCountUp(value || 0);
@@ -19,29 +18,6 @@ function Stat({ label, value, text, icon, to }) {
   return to ? <Link to={to} style={{ textDecoration: 'none' }}>{inner}</Link> : inner;
 }
 
-const ACTION_ICON = {
-  image_added: '🖼️',
-  manually_approved: '📁',
-  image_rejected: '🚫',
-  images_deleted: '🗑️',
-  images_moved: '📂',
-  category_created: '➕',
-  category_renamed: '✏️',
-  category_deleted: '🗑️',
-  file_added: '📄',
-};
-
-const ACTION_LABEL = {
-  image_added: 'Image added (AI)',
-  manually_approved: 'Image saved',
-  image_rejected: 'Image rejected',
-  images_deleted: 'Images deleted',
-  images_moved: 'Images moved',
-  category_created: 'Category created',
-  category_renamed: 'Category renamed',
-  category_deleted: 'Category deleted',
-  file_added: 'File saved',
-};
 
 export default function Dashboard() {
   const { user, toast } = useApp();
@@ -104,74 +80,7 @@ export default function Dashboard() {
         </div>
       </section>
 
-      <div className="two">
-        {/* Recent uploads */}
-        {s.recent?.length > 0 && (
-          <section className="glass pad">
-            <div className="row" style={{ justifyContent: 'space-between', marginBottom: '14px' }}>
-              <h3 style={{ margin: 0 }}>Recent uploads</h3>
-              <Link to="/gallery" className="muted small" style={{ textDecoration: 'none' }}>View all →</Link>
-            </div>
-            <div className="strip">
-              <AnimatePresence>
-                {s.recent.map((img, i) => (
-                  <motion.div
-                    key={img.id}
-                    className="tile glass"
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: i * 0.04 }}
-                  >
-                    <Link to={`/gallery`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                      <SecureImage
-                        thumbToken={img.thumbToken}
-                        alt={img.name || img.original_filename}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '14px' }}
-                      />
-                    </Link>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
-          </section>
-        )}
 
-        {/* Activity feed */}
-        {s.activity?.length > 0 && (
-          <section className="glass pad">
-            <h3 style={{ marginBottom: '14px' }}>Recent activity</h3>
-            <div style={{ display: 'grid', gap: '2px' }}>
-              {s.activity.map((a, i) => (
-                <motion.div
-                  key={i}
-                  className="act"
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '8px 0', borderBottom: i < s.activity.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}
-                >
-                  <span style={{ fontSize: '1.1rem', marginTop: '1px', flex: 'none' }}>
-                    {ACTION_ICON[a.action] || '📋'}
-                  </span>
-                  <div style={{ display: 'grid', gap: '1px', minWidth: 0 }}>
-                    <span style={{ fontSize: '0.88rem', fontWeight: 600 }}>
-                      {ACTION_LABEL[a.action] || a.action}
-                    </span>
-                    {a.detail && (
-                      <span className="muted small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {a.detail}
-                      </span>
-                    )}
-                  </div>
-                  <span className="muted small" style={{ flex: 'none', marginLeft: 'auto', paddingLeft: '8px' }}>
-                    {ago(a.created_at)}
-                  </span>
-                </motion.div>
-              ))}
-            </div>
-          </section>
-        )}
-      </div>
 
       {/* Vault tip */}
       <div className="glass pad" style={{ display: 'flex', gap: '14px', alignItems: 'center', background: 'rgba(232,201,165,0.05)', borderColor: 'rgba(232,201,165,0.15)', marginTop: '8px' }}>
