@@ -18,6 +18,22 @@ export default function MobileUnlockPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [statusResult, setStatusResult] = useState(''); // 'approved' | 'rejected' | ''
+  const [remoteLocked, setRemoteLocked] = useState(false);
+  const [remoteBusy, setRemoteBusy] = useState(false);
+
+  const handleRemoteLock = async (action = 'lock_vault') => {
+    if (!requestId || remoteBusy) return;
+    setRemoteBusy(true);
+    try {
+      await authService.remoteLockByRequest({ requestId, action, type: 'login' });
+      setRemoteLocked(true);
+      toast?.('🔒 Laptop was locked remotely!');
+    } catch (e) {
+      toast?.(e.message || 'Failed to lock laptop', 'err');
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!requestId) {
@@ -157,17 +173,50 @@ export default function MobileUnlockPage() {
         )}
 
         {!loading && statusResult === 'approved' && (
-          <div style={{ margin: '18px 0', display: 'grid', gap: '12px' }}>
+          <div style={{ margin: '18px 0', display: 'grid', gap: '14px' }}>
             <div style={{ fontSize: '3rem' }}>✅</div>
             <h3 style={{ color: 'var(--green, #4ade80)', margin: 0 }}>Laptop Session Approved!</h3>
             <p className="muted" style={{ fontSize: '0.9rem', margin: 0 }}>
-              Your laptop has been unlocked and authenticated. You may now return to your computer.
+              Your laptop has been unlocked and authenticated.
             </p>
+
+            {remoteLocked ? (
+              <div style={{ padding: '10px', background: 'rgba(232, 201, 165, 0.12)', borderRadius: '10px', border: '1px solid var(--gold)', color: 'var(--gold)' }}>
+                🔒 Laptop has been remotely locked from this phone.
+              </div>
+            ) : (
+              <div className="glass pad" style={{ padding: '12px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', display: 'grid', gap: '8px' }}>
+                <span className="muted small" style={{ fontSize: '0.8rem' }}>
+                  🛡️ Remotely lock your laptop anytime:
+                </span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="btn ghost sm"
+                    onClick={() => handleRemoteLock('lock_categories')}
+                    disabled={remoteBusy}
+                    style={{ border: '1px solid var(--gold)', color: 'var(--gold)', fontWeight: 600 }}
+                  >
+                    {remoteBusy ? '…' : '🔒 Lock Folders'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn danger sm"
+                    onClick={() => handleRemoteLock('lock_vault')}
+                    disabled={remoteBusy}
+                    style={{ fontWeight: 600 }}
+                  >
+                    {remoteBusy ? '…' : '🚨 Lock Screen'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               className="btn primary"
               onClick={() => navigate('/')}
-              style={{ marginTop: '10px' }}
+              style={{ marginTop: '4px' }}
             >
               Open Vault on Mobile
             </button>

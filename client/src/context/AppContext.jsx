@@ -91,6 +91,45 @@ export function AppProvider({ children }) {
     setVaultLocked(false);
   };
 
+  // Remote Security Command Listener (Laptop/Desktop receives remote lock/logout commands from mobile)
+  useEffect(() => {
+    if (!user) return;
+
+    let busy = false;
+    const checkSecurityCommands = async () => {
+      if (busy) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      busy = true;
+      try {
+        const res = await authService.securityHeartbeat();
+        if (res?.command) {
+          if (res.command === 'lock_categories') {
+            unlockedStore.clear();
+            toast('🔒 Protected categories were remotely locked from your mobile phone', 'err');
+            window.dispatchEvent(new CustomEvent('vc:unlocked-change'));
+          } else if (res.command === 'lock_vault') {
+            unlockedStore.clear();
+            lockVault();
+            toast('🚨 Vault was remotely locked from your mobile phone', 'err');
+            window.dispatchEvent(new CustomEvent('vc:unlocked-change'));
+          } else if (res.command === 'logout') {
+            unlockedStore.clear();
+            setUser(null);
+            setVaultLocked(false);
+            toast('⛔ Session remotely terminated from your mobile phone', 'err');
+          }
+        }
+      } catch {
+        // Silently continue on background network hiccup
+      } finally {
+        busy = false;
+      }
+    };
+
+    const timer = setInterval(checkSecurityCommands, 2500);
+    return () => clearInterval(timer);
+  }, [user, lockVault, toast]);
+
   const handleUnlockSubmit = async (e) => {
     e.preventDefault();
     if (!unlockPassword || !user) return;

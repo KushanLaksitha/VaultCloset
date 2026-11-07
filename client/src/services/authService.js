@@ -13,4 +13,7 @@ export const authService = {
   getRequestDetails: (id) => api.get(`/auth/mobile-auth/request-details/${id}`),
   directUnlock: (b) => api.post('/auth/mobile-auth/direct-unlock', b),
   toggleMobileAuth: (b) => api.post('/auth/mobile-auth/toggle', b),
+  remoteLock: (action) => api.post('/auth/remote-lock', { action }),
+  remoteLockByRequest: (b) => api.post('/auth/remote-lock-by-request', b),
+  securityHeartbeat: () => api.get('/auth/security-heartbeat'),
 };

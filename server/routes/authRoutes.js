@@ -436,6 +436,36 @@ router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
 }));
 
 
+// Remote lock command via requestId (Public endpoint for scanned QR pages)
+router.post('/remote-lock-by-request', wrap(async (req, res) => {
+  const { requestId, action = 'lock_categories', type = 'category' } = req.body;
+  if (!requestId) throw new AppError(400, 'Missing requestId');
+
+  let userId = null;
+  if (type === 'category') {
+    const [[row]] = await db.query('SELECT user_id FROM category_unlock_requests WHERE id=?', [requestId]);
+    userId = row ? row.user_id : null;
+  } else {
+    const [[row]] = await db.query('SELECT user_id FROM desktop_login_requests WHERE id=?', [requestId]);
+    userId = row ? row.user_id : null;
+  }
+
+  if (!userId) throw new AppError(404, 'Request not found');
+
+  const validActions = ['lock_categories', 'lock_vault', 'logout'];
+  const cmd = validActions.includes(action) ? action : 'lock_categories';
+
+  await db.query(
+    'INSERT INTO remote_security_commands (user_id, target_device, command) VALUES (?, ?, ?)',
+    [userId, 'desktop', cmd]
+  );
+  await db.query("UPDATE category_unlock_requests SET status='expired' WHERE user_id=? AND status='pending'", [userId]);
+  await log(userId, 'remote_security_command', `Remote ${cmd} triggered via mobile QR link`);
+
+  res.json({ ok: true, action: cmd });
+}));
+
+
 // Toggle Mobile Auth Requirement (Requires account password confirmation)
 router.post('/mobile-auth/toggle', requireAuth, wrap(async (req, res) => {
   const { enabled, password } = req.body;
@@ -512,6 +542,58 @@ router.post('/username', requireAuth, wrap(async (req, res) => {
 
   const [[updated]] = await db.query('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ ok: true, user: publicUser(updated) });
+}));
+
+
+// ── Remote Security Control Endpoints ────────────────────────────────────────
+
+// Dispatch remote security action (called from mobile phone)
+router.post('/remote-lock', requireAuth, wrap(async (req, res) => {
+  const { action = 'lock_categories' } = req.body;
+  const validActions = ['lock_categories', 'lock_vault', 'logout'];
+  if (!validActions.includes(action)) {
+    throw new AppError(400, `Invalid action. Must be one of: ${validActions.join(', ')}`);
+  }
+
+  await db.query(
+    'INSERT INTO remote_security_commands (user_id, target_device, command) VALUES (?, ?, ?)',
+    [req.user.id, 'desktop', action]
+  );
+
+  // If locking categories or vault, expire any pending category unlock requests
+  if (action === 'lock_categories' || action === 'lock_vault') {
+    await db.query(
+      "UPDATE category_unlock_requests SET status='expired' WHERE user_id=? AND status='pending'",
+      [req.user.id]
+    );
+  }
+
+  await log(req.user.id, 'remote_command_sent', `Mobile dispatched remote command: ${action}`);
+
+  res.json({ ok: true, action, message: `Remote command '${action}' sent to laptop` });
+}));
+
+
+// Security heartbeat poll (called by laptop/desktop to receive remote commands)
+router.get('/security-heartbeat', requireAuth, wrap(async (req, res) => {
+  const [rows] = await db.query(
+    `SELECT id, command, created_at FROM remote_security_commands
+     WHERE user_id=? AND executed_at IS NULL AND created_at >= NOW() - INTERVAL 1 MINUTE
+     ORDER BY id ASC LIMIT 1`,
+    [req.user.id]
+  );
+
+  if (rows.length === 0) {
+    return res.json({ command: null });
+  }
+
+  const cmd = rows[0];
+  await db.query('UPDATE remote_security_commands SET executed_at=NOW() WHERE id=?', [cmd.id]);
+
+  res.json({
+    command: cmd.command,
+    timestamp: cmd.created_at,
+  });
 }));
 
 module.exports = router;

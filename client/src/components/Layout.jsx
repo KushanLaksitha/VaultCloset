@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useApp } from '../context/AppContext.jsx';
 import MobileConnectModal from './MobileConnectModal.jsx';
 import MobileAuthPromptModal from './MobileAuthPromptModal.jsx';
+import RemoteLockModal from './RemoteLockModal.jsx';
 
 const nav = [
   ['/', 'Dashboard'],
@@ -20,6 +21,7 @@ export default function Layout() {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [mobileModal, setMobileModal] = useState(false);
+  const [remoteLockOpen, setRemoteLockOpen] = useState(false);
   const loc = useLocation();
 
   useEffect(() => {
@@ -42,6 +44,23 @@ export default function Layout() {
           <b>VaultCloset</b>
         </div>
         <div className="mobile-actions">
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => setRemoteLockOpen(true)}
+            title="Remote Lock Laptop & Categories"
+            style={{
+              border: '1px solid rgba(232, 201, 165, 0.45)',
+              color: 'var(--gold)',
+              fontSize: '0.78rem',
+              padding: '4px 8px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            🛡️ Remote Lock
+          </button>
           <button
             type="button"
             className="btn ghost sm mobile-qr-btn"
@@ -122,6 +141,18 @@ export default function Layout() {
           <button
             type="button"
             className="btn ghost"
+            onClick={() => {
+              setDrawer(false);
+              setRemoteLockOpen(true);
+            }}
+            title="Remotely lock laptop account or categories"
+            style={{ color: 'var(--gold)' }}
+          >
+            {collapsed ? '🛡️' : '🛡️ Remote Lock Laptop'}
+          </button>
+          <button
+            type="button"
+            className="btn ghost"
             onClick={lockVault}
             title="Lock Vault immediately (Alt+L)"
           >
@@ -155,6 +186,7 @@ export default function Layout() {
 
       <MobileConnectModal open={mobileModal} onClose={() => setMobileModal(false)} />
       <MobileAuthPromptModal />
+      <RemoteLockModal open={remoteLockOpen} onClose={() => setRemoteLockOpen(false)} />
     </div>
   );
 }

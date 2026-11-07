@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { categoryService } from '../services/categoryService.js';
+import { authService } from '../services/authService.js';
 import { useApp } from '../context/AppContext.jsx';
 
 export default function MobileCategoryUnlockPage() {
@@ -18,6 +19,22 @@ export default function MobileCategoryUnlockPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [statusResult, setStatusResult] = useState(''); // 'approved' | 'rejected' | ''
+  const [remoteLocked, setRemoteLocked] = useState(false);
+  const [remoteBusy, setRemoteBusy] = useState(false);
+
+  const handleRemoteLock = async (action = 'lock_categories') => {
+    if (!requestId || remoteBusy) return;
+    setRemoteBusy(true);
+    try {
+      await authService.remoteLockByRequest({ requestId, action, type: 'category' });
+      setRemoteLocked(true);
+      toast?.('🔒 Folders on laptop were locked!');
+    } catch (e) {
+      toast?.(e.message || 'Failed to lock laptop remotely', 'err');
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!requestId) {
@@ -144,17 +161,50 @@ export default function MobileCategoryUnlockPage() {
         )}
 
         {!loading && statusResult === 'approved' && (
-          <div style={{ margin: '18px 0', display: 'grid', gap: '12px' }}>
+          <div style={{ margin: '18px 0', display: 'grid', gap: '14px' }}>
             <div style={{ fontSize: '3rem' }}>✅</div>
-            <h3 style={{ color: 'var(--green, #4ade80)', margin: 0 }}>Folder Unlocked!</h3>
+            <h3 style={{ color: 'var(--green, #4ade80)', margin: 0 }}>Folder Unlocked on Laptop!</h3>
             <p className="muted" style={{ fontSize: '0.9rem', margin: 0 }}>
-              The protected folder has been unlocked on your laptop. You may now return to your computer.
+              The protected folder has been unlocked on your computer screen.
             </p>
+
+            {remoteLocked ? (
+              <div style={{ padding: '10px', background: 'rgba(232, 201, 165, 0.12)', borderRadius: '10px', border: '1px solid var(--gold)', color: 'var(--gold)' }}>
+                🔒 Categories on your laptop have been locked again.
+              </div>
+            ) : (
+              <div className="glass pad" style={{ padding: '12px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', display: 'grid', gap: '8px' }}>
+                <span className="muted small" style={{ fontSize: '0.8rem' }}>
+                  🛡️ Stepping away from your laptop? Lock it now:
+                </span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="btn ghost sm"
+                    onClick={() => handleRemoteLock('lock_categories')}
+                    disabled={remoteBusy}
+                    style={{ border: '1px solid var(--gold)', color: 'var(--gold)', fontWeight: 600 }}
+                  >
+                    {remoteBusy ? 'Locking…' : '🔒 Re-lock Folders'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn danger sm"
+                    onClick={() => handleRemoteLock('lock_vault')}
+                    disabled={remoteBusy}
+                    style={{ fontWeight: 600 }}
+                  >
+                    {remoteBusy ? 'Locking…' : '🚨 Lock Screen'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               className="btn primary"
               onClick={() => navigate('/')}
-              style={{ marginTop: '10px' }}
+              style={{ marginTop: '4px' }}
             >
               Open Vault on Mobile
             </button>
