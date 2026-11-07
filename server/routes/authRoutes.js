@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const db = require('../config/db');
 const env = require('../config/env');
@@ -9,7 +10,42 @@ const { log } = require('../services/imageService');
 const { encryptCategory } = require('../services/encryptionService');
 
 const cookieOpts = { httpOnly: true, sameSite: 'lax', secure: env.prod, maxAge: env.sessionHours * 3600e3 };
-const publicUser = (u) => ({ id: u.id, username: u.username, displayName: u.display_name, email: u.email });
+const publicUser = (u) => ({
+  id: u.id,
+  username: u.username,
+  displayName: u.display_name,
+  email: u.email,
+  mobileAuthEnabled: Boolean(u.mobile_auth_enabled),
+});
+
+function getDeviceInfo(ua) {
+  if (!ua) return 'Desktop Browser';
+  let os = 'Desktop';
+  if (/Windows NT 10.0/i.test(ua)) os = 'Windows 10/11';
+  else if (/Windows NT 6.3/i.test(ua)) os = 'Windows 8.1';
+  else if (/Windows NT 6.1/i.test(ua)) os = 'Windows 7';
+  else if (/Windows/i.test(ua)) os = 'Windows PC';
+  else if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
+  else if (/Linux/i.test(ua) && !/Android/i.test(ua)) os = 'Linux PC';
+  else if (/iPhone/i.test(ua)) os = 'iPhone';
+  else if (/iPad/i.test(ua)) os = 'iPad';
+  else if (/Android/i.test(ua)) os = 'Android Phone';
+
+  let browser = 'Browser';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Chrome';
+  else if (/Safari\//i.test(ua) && !/Chrome/i.test(ua)) browser = 'Safari';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+
+  return `${os} · ${browser}`;
+}
+
+function isMobileUserAgent(ua, explicitMobileFlag) {
+  if (explicitMobileFlag === true) return true;
+  if (explicitMobileFlag === false) return false;
+  if (!ua) return false;
+  return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+}
 
 function validateUsername(val) {
   const u = String(val || '').trim().toLowerCase();
@@ -156,8 +192,225 @@ router.post('/login', wrap(async (req, res) => {
 
   // Clear failed attempt tracking on successful login
   loginAttempts.delete(lockKey);
+
+  // Check if mobile authorization is required for desktop/laptop sign-in
+  const isMobile = isMobileUserAgent(req.headers['user-agent'], req.body.isMobile);
+  if (Boolean(u.mobile_auth_enabled) && !isMobile) {
+    // Invalidate prior pending requests for this user
+    await db.query("UPDATE desktop_login_requests SET status='expired' WHERE user_id=? AND status='pending'", [u.id]);
+
+    const requestId = crypto.randomUUID();
+    const rawCode = String(crypto.randomInt(100000, 999999));
+    const securityCode = `${rawCode.slice(0, 3)} ${rawCode.slice(3)}`;
+    const deviceInfo = getDeviceInfo(req.headers['user-agent']);
+    const expiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 minutes
+
+    await db.query(
+      `INSERT INTO desktop_login_requests (id, user_id, security_code, status, device_info, ip_address, expires_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+      [requestId, u.id, securityCode, deviceInfo, ip, expiresAt]
+    );
+
+    await log(u.id, 'mobile_auth_requested', `Desktop sign-in paused for mobile approval from IP ${ip} (Code: ${securityCode}, Device: ${deviceInfo})`);
+
+    return res.json({
+      requireMobileAuth: true,
+      loginRequestId: requestId,
+      securityCode,
+      deviceInfo,
+      expiresIn: 180,
+      username: u.username,
+      displayName: u.display_name,
+    });
+  }
+
   await log(u.id, 'login', `Signed in successfully as @${u.username} from IP ${ip}`);
   res.cookie('vc_session', signSession(u.id), cookieOpts).json({ user: publicUser(u) });
+}));
+
+
+// Poll status of desktop login request
+router.get('/login-request/:id/status', wrap(async (req, res) => {
+  const { id } = req.params;
+  const [[row]] = await db.query('SELECT * FROM desktop_login_requests WHERE id=?', [id]);
+  if (!row) {
+    return res.json({ status: 'not_found' });
+  }
+
+  const now = new Date();
+  if (new Date(row.expires_at) < now && row.status === 'pending') {
+    await db.query("UPDATE desktop_login_requests SET status='expired' WHERE id=?", [id]);
+    return res.json({ status: 'expired' });
+  }
+
+  if (row.status === 'approved') {
+    if (row.session_token) {
+      const [[u]] = await db.query('SELECT * FROM users WHERE id=?', [row.user_id]);
+      if (!u) throw new AppError(404, 'User not found');
+
+      // Set session cookie on the desktop browser
+      res.cookie('vc_session', row.session_token, cookieOpts);
+
+      // Invalidate the session_token so it cannot be fetched again
+      await db.query("UPDATE desktop_login_requests SET session_token=NULL WHERE id=?", [id]);
+      await log(u.id, 'mobile_auth_completed', `Desktop login completed successfully via mobile authorization`);
+
+      return res.json({
+        status: 'approved',
+        user: publicUser(u),
+      });
+    }
+    return res.json({ status: 'approved' });
+  }
+
+  const remainingSeconds = Math.max(0, Math.round((new Date(row.expires_at) - now) / 1000));
+  return res.json({
+    status: row.status,
+    remainingSeconds,
+    securityCode: row.security_code,
+  });
+}));
+
+
+// Cancel a pending login request
+router.post('/login-request/:id/cancel', wrap(async (req, res) => {
+  const { id } = req.params;
+  await db.query("UPDATE desktop_login_requests SET status='expired' WHERE id=? AND status='pending'", [id]);
+  res.json({ ok: true });
+}));
+
+
+// Check for pending desktop login requests (Mobile user polling)
+router.get('/mobile-auth/pending', requireAuth, wrap(async (req, res) => {
+  const [rows] = await db.query(
+    `SELECT id, security_code, device_info, ip_address, expires_at, created_at
+     FROM desktop_login_requests
+     WHERE user_id=? AND status='pending' AND expires_at > NOW()
+     ORDER BY created_at DESC LIMIT 1`,
+    [req.user.id]
+  );
+  res.json({ pendingRequest: rows[0] || null });
+}));
+
+
+// Approve or reject desktop login request from mobile app
+router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
+  const { requestId, approve } = req.body;
+  if (!requestId) throw new AppError(400, 'Missing requestId');
+
+  const [[row]] = await db.query(
+    'SELECT * FROM desktop_login_requests WHERE id=? AND user_id=?',
+    [requestId, req.user.id]
+  );
+
+  if (!row) throw new AppError(404, 'Login request not found');
+  if (row.status !== 'pending') throw new AppError(400, `Request is already ${row.status}`);
+  if (new Date(row.expires_at) < new Date()) {
+    await db.query("UPDATE desktop_login_requests SET status='expired' WHERE id=?", [requestId]);
+    throw new AppError(400, 'Login request has expired');
+  }
+
+  if (approve) {
+    const sessionToken = signSession(req.user.id);
+    await db.query(
+      "UPDATE desktop_login_requests SET status='approved', session_token=? WHERE id=?",
+      [sessionToken, requestId]
+    );
+    await log(req.user.id, 'mobile_auth_approved', `Approved desktop session from device ${row.device_info || 'Unknown'} (Code: ${row.security_code})`);
+    return res.json({ ok: true, status: 'approved' });
+  } else {
+    await db.query("UPDATE desktop_login_requests SET status='rejected' WHERE id=?", [requestId]);
+    await log(req.user.id, 'mobile_auth_rejected', `Denied desktop session from device ${row.device_info || 'Unknown'} (Code: ${row.security_code})`);
+    return res.json({ ok: true, status: 'rejected' });
+  }
+}));
+
+
+// Get public info for QR unlock screen
+router.get('/mobile-auth/request-details/:id', wrap(async (req, res) => {
+  const { id } = req.params;
+  const [[row]] = await db.query(
+    `SELECT dlr.id, dlr.security_code, dlr.device_info, dlr.ip_address, dlr.status, dlr.expires_at,
+            u.username, u.display_name
+     FROM desktop_login_requests dlr
+     JOIN users u ON u.id = dlr.user_id
+     WHERE dlr.id = ?`,
+    [id]
+  );
+  if (!row) throw new AppError(404, 'Login request not found');
+
+  const expired = new Date(row.expires_at) < new Date();
+  if (expired && row.status === 'pending') {
+    await db.query("UPDATE desktop_login_requests SET status='expired' WHERE id=?", [id]);
+    row.status = 'expired';
+  }
+
+  res.json({
+    id: row.id,
+    securityCode: row.security_code,
+    deviceInfo: row.device_info,
+    ipAddress: row.ip_address,
+    status: row.status,
+    username: row.username,
+    displayName: row.display_name,
+    expiresAt: row.expires_at,
+  });
+}));
+
+
+// Direct QR code unlock from mobile (when mobile user authorizes via password)
+router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
+  const { requestId, password, approve } = req.body;
+  if (!requestId) throw new AppError(400, 'Missing requestId');
+
+  const [[row]] = await db.query('SELECT * FROM desktop_login_requests WHERE id=?', [requestId]);
+  if (!row) throw new AppError(404, 'Login request not found');
+  if (row.status !== 'pending' || new Date(row.expires_at) < new Date()) {
+    throw new AppError(400, 'This login request has already expired or been completed');
+  }
+
+  const [[u]] = await db.query('SELECT * FROM users WHERE id=?', [row.user_id]);
+  if (!u) throw new AppError(404, 'User not found');
+
+  const ok = await bcrypt.compare(String(password || ''), u.password_hash);
+  if (!ok) throw new AppError(403, 'Incorrect password');
+
+  if (approve) {
+    const sessionToken = signSession(u.id);
+    await db.query(
+      "UPDATE desktop_login_requests SET status='approved', session_token=? WHERE id=?",
+      [sessionToken, requestId]
+    );
+    await log(u.id, 'mobile_auth_approved', `Approved desktop session via mobile QR unlock (Code: ${row.security_code})`);
+
+    // Also sign in this mobile device so user is ready
+    res.cookie('vc_session', sessionToken, cookieOpts).json({
+      ok: true,
+      status: 'approved',
+      user: publicUser(u),
+    });
+  } else {
+    await db.query("UPDATE desktop_login_requests SET status='rejected' WHERE id=?", [requestId]);
+    await log(u.id, 'mobile_auth_rejected', `Denied desktop session via mobile QR unlock (Code: ${row.security_code})`);
+    res.json({ ok: true, status: 'rejected' });
+  }
+}));
+
+
+// Toggle Mobile Auth Requirement (Requires account password confirmation)
+router.post('/mobile-auth/toggle', requireAuth, wrap(async (req, res) => {
+  const { enabled, password } = req.body;
+  const [[u]] = await db.query('SELECT password_hash FROM users WHERE id=?', [req.user.id]);
+  if (!u) throw new AppError(401, 'User not found');
+
+  const ok = await bcrypt.compare(String(password || ''), u.password_hash);
+  if (!ok) throw new AppError(403, 'Current password is required to change security settings');
+
+  const newStatus = enabled ? 1 : 0;
+  await db.query('UPDATE users SET mobile_auth_enabled=? WHERE id=?', [newStatus, req.user.id]);
+  await log(req.user.id, 'security_setting_changed', `Mobile unlock requirement set to ${newStatus ? 'ENABLED' : 'DISABLED'}`);
+
+  res.json({ ok: true, mobileAuthEnabled: Boolean(newStatus) });
 }));
 
 

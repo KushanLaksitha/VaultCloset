@@ -33,6 +33,12 @@ export default function Settings() {
   const [pwBusy, setPwBusy] = useState(false);
   const [pwErr, setPwErr] = useState('');
 
+  // Mobile Auth Gate state
+  const [mobileAuthModal, setMobileAuthModal] = useState(false);
+  const [mobileAuthPassword, setMobileAuthPassword] = useState('');
+  const [mobileAuthBusy, setMobileAuthBusy] = useState(false);
+  const [mobileAuthErr, setMobileAuthErr] = useState('');
+
   useEffect(() => {
     if (user?.username) setUsernameInput(user.username);
   }, [user]);
@@ -80,6 +86,35 @@ export default function Settings() {
       setPwErr(x.message || 'Failed to change password');
     } finally {
       setPwBusy(false);
+    }
+  };
+
+  const handleToggleMobileAuth = async (e) => {
+    e.preventDefault();
+    if (!mobileAuthPassword) {
+      setMobileAuthErr('Please enter your account password');
+      return;
+    }
+    setMobileAuthBusy(true);
+    setMobileAuthErr('');
+    try {
+      const nextStatus = !user.mobileAuthEnabled;
+      const res = await authService.toggleMobileAuth({
+        enabled: nextStatus,
+        password: mobileAuthPassword,
+      });
+      setUser({ ...user, mobileAuthEnabled: res.mobileAuthEnabled });
+      setMobileAuthModal(false);
+      setMobileAuthPassword('');
+      toast(
+        res.mobileAuthEnabled
+          ? '🛡️ Mobile Unlock Gate ENABLED: Laptop sign-ins now require mobile approval'
+          : '⚪ Mobile Unlock Gate DISABLED: Standard password login restored'
+      );
+    } catch (x) {
+      setMobileAuthErr(x.message || 'Verification failed');
+    } finally {
+      setMobileAuthBusy(false);
     }
   };
 
@@ -181,6 +216,51 @@ export default function Settings() {
             </button>
           </div>
         </form>
+      </section>
+
+      {/* 📱 Mobile Unlock Gate (Laptop Two-Factor Authorization) */}
+      <section className="glass pad stack" style={{ marginBottom: 14, borderLeft: '4px solid var(--gold)' }}>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <div className="row" style={{ alignItems: 'center', gap: '10px' }}>
+              <h3 style={{ margin: 0 }}>📱 Mobile Unlock Gate (Laptop 2FA Protection)</h3>
+              <span
+                style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 600,
+                  padding: '3px 10px',
+                  borderRadius: '12px',
+                  background: user.mobileAuthEnabled ? 'rgba(74, 222, 128, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                  color: user.mobileAuthEnabled ? '#4ade80' : 'var(--muted)',
+                  border: user.mobileAuthEnabled ? '1px solid #4ade80' : '1px solid rgba(255, 255, 255, 0.2)',
+                }}
+              >
+                {user.mobileAuthEnabled ? '● ACTIVE (Mobile Approval Required)' : '○ DISABLED (Direct Login)'}
+              </span>
+            </div>
+            <p className="muted small" style={{ margin: '6px 0 0', maxWidth: '640px', lineHeight: 1.5 }}>
+              පරිගණකයකින් හෝ ලැප්ටොප් එකෙන් log වීමේදී, ඔබගේ Mobile දුරකථනයෙන් log වී Unlock (Approve) කිරීමෙන් පමණක් PC Session එක Open වන ආරක්ෂිත ක්‍රමයයි.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className={user.mobileAuthEnabled ? 'btn ghost' : 'btn primary'}
+            onClick={() => {
+              setMobileAuthPassword('');
+              setMobileAuthErr('');
+              setMobileAuthModal(true);
+            }}
+          >
+            {user.mobileAuthEnabled ? 'Turn OFF Mobile Gate' : '🛡️ Enable Mobile Unlock Gate'}
+          </button>
+        </div>
+
+        <div style={{ marginTop: '8px', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '10px', fontSize: '0.82rem', display: 'grid', gap: '5px' }}>
+          <div>• <b>Security Protocol:</b> Entering your username & password on a laptop holds sign-in in a "Waiting for Mobile" gate with a 6-digit match code.</div>
+          <div>• <b>Mobile Authorization:</b> Sign into VaultCloset on your phone (or scan the laptop screen QR code) and tap <b>[ Approve ]</b> to instantly unlock your laptop.</div>
+          <div>• <b>Auto-Expiry:</b> Unapproved laptop login requests expire automatically after 3 minutes.</div>
+        </div>
       </section>
 
       {/* Security & Vault Protection */}
@@ -318,6 +398,59 @@ export default function Settings() {
           </motion.div>
         )}
       </section>
+
+      {/* Password Confirmation Modal for Mobile Gate Toggle */}
+      {mobileAuthModal && (
+        <div className="overlay" style={{ zIndex: 110, display: 'grid', placeItems: 'center', padding: '16px' }}>
+          <div className="modal glass" style={{ maxWidth: '420px', width: '100%' }}>
+            <h3 style={{ margin: '0 0 8px' }}>
+              {user.mobileAuthEnabled ? 'Disable Mobile Unlock Gate' : 'Enable Mobile Unlock Gate'}
+            </h3>
+            <p className="muted small" style={{ margin: '0 0 16px', lineHeight: 1.5 }}>
+              {user.mobileAuthEnabled
+                ? 'Enter your account password to turn off mobile authorization requirement for laptop logins.'
+                : 'Enter your account password to require mobile phone approval whenever you sign in from a PC or laptop.'}
+            </p>
+
+            <form onSubmit={handleToggleMobileAuth} style={{ display: 'grid', gap: '12px' }}>
+              <label className="lbl" style={{ margin: 0 }}>
+                Account Password (@{user.username})
+                <input
+                  type="password"
+                  autoFocus
+                  required
+                  placeholder="Enter your password"
+                  value={mobileAuthPassword}
+                  onChange={(e) => setMobileAuthPassword(e.target.value)}
+                />
+              </label>
+
+              {mobileAuthErr && <p className="error small" style={{ margin: 0 }}>{mobileAuthErr}</p>}
+
+              <div className="row end" style={{ marginTop: '6px', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => {
+                    setMobileAuthModal(false);
+                    setMobileAuthPassword('');
+                    setMobileAuthErr('');
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className={user.mobileAuthEnabled ? 'btn' : 'btn primary'}
+                  disabled={mobileAuthBusy}
+                >
+                  {mobileAuthBusy ? 'Verifying…' : user.mobileAuthEnabled ? 'Disable Mobile Gate' : 'Enable Mobile Gate'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }

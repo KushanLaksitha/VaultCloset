@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useApp } from '../context/AppContext.jsx';
 import MobileConnectModal from './MobileConnectModal.jsx';
+import MobileAuthPromptModal from './MobileAuthPromptModal.jsx';
 
 const nav = [
   ['/', 'Dashboard'],
@@ -153,6 +154,7 @@ export default function Layout() {
       </AnimatePresence>
 
       <MobileConnectModal open={mobileModal} onClose={() => setMobileModal(false)} />
+      <MobileAuthPromptModal />
     </div>
   );
 }
