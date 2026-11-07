@@ -14,6 +14,7 @@ export default function MobileUnlockPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [statusResult, setStatusResult] = useState(''); // 'approved' | 'rejected' | ''
 
@@ -40,46 +41,64 @@ export default function MobileUnlockPage() {
       });
   }, [requestId]);
 
-  const handleApprove = async () => {
-    if (!requestId) return;
-    setBusy(true);
+  const handleApprove = async (e) => {
+    if (e) e.preventDefault();
+    if (!requestId || busy) return;
     setErr('');
+
+    if (!password) {
+      setErr('Please enter your account password');
+      return;
+    }
+    if (!confirmPassword) {
+      setErr('Please re-enter your password to confirm');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setErr('Passwords do not match. Please re-enter both accurately.');
+      return;
+    }
+
+    setBusy(true);
     try {
       if (user) {
-        // Authenticated approval
-        await authService.respondMobileAuth({ requestId, approve: true });
+        // Authenticated approval with double password check
+        await authService.respondMobileAuth({
+          requestId,
+          approve: true,
+          password,
+          confirmPassword,
+        });
         setStatusResult('approved');
         toast?.('Laptop session approved!');
       } else {
-        // Direct unlock with password
-        if (!password) {
-          setErr('Please enter your account password to authorize.');
-          setBusy(false);
-          return;
-        }
-        const res = await authService.directUnlock({ requestId, password, approve: true });
+        // Direct unlock with double password check
+        const res = await authService.directUnlock({
+          requestId,
+          password,
+          confirmPassword,
+          approve: true,
+        });
         if (res.user) setUser(res.user);
         setStatusResult('approved');
         toast?.('Laptop session unlocked!');
       }
     } catch (x) {
-      setErr(x.message || 'Failed to approve request');
+      setErr(x.message || 'Incorrect password. Laptop authorization rejected.');
     } finally {
       setBusy(false);
     }
   };
 
   const handleReject = async () => {
-    if (!requestId) return;
+    if (!requestId || busy) return;
     setBusy(true);
     setErr('');
     try {
       if (user) {
         await authService.respondMobileAuth({ requestId, approve: false });
       } else {
-        await authService.directUnlock({ requestId, password: password || 'dummy', approve: false }).catch(() => {
-          // Even if password check fails on deny, we still want to inform user
-        });
+        await authService.directUnlock({ requestId, password: 'dummy', confirmPassword: 'dummy', approve: false }).catch(() => {});
       }
       setStatusResult('rejected');
     } catch (x) {
@@ -88,6 +107,8 @@ export default function MobileUnlockPage() {
       setBusy(false);
     }
   };
+
+  const mismatch = password && confirmPassword && password !== confirmPassword;
 
   return (
     <div className="auth" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
@@ -164,9 +185,9 @@ export default function MobileUnlockPage() {
         )}
 
         {!loading && details && !statusResult && !err && (
-          <div style={{ display: 'grid', gap: '16px', marginTop: '12px', textAlign: 'left' }}>
+          <form onSubmit={handleApprove} style={{ display: 'grid', gap: '14px', marginTop: '12px', textAlign: 'left' }}>
             <p className="muted" style={{ margin: 0, fontSize: '0.86rem', textAlign: 'center' }}>
-              A laptop device is requesting access to account <b>@{details.username}</b>.
+              A laptop device is requesting access to account <b>@{details.username}</b>. Verify the code and type your password twice to unlock.
             </p>
 
             {/* Match Code Box */}
@@ -175,49 +196,74 @@ export default function MobileUnlockPage() {
                 background: 'rgba(232, 201, 165, 0.08)',
                 border: '1px solid var(--gold)',
                 borderRadius: '12px',
-                padding: '14px',
+                padding: '12px',
                 textAlign: 'center',
               }}
             >
-              <span className="muted small" style={{ display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <span className="muted small" style={{ display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.72rem' }}>
                 Security Match Code
               </span>
               <strong
                 style={{
                   fontFamily: 'monospace',
-                  fontSize: '2rem',
+                  fontSize: '1.9rem',
                   letterSpacing: '0.18em',
                   color: 'var(--gold)',
                   display: 'block',
-                  margin: '6px 0 2px',
+                  margin: '4px 0 2px',
                 }}
               >
                 {details.securityCode}
               </strong>
-              <span className="muted small" style={{ fontSize: '0.78rem' }}>
+              <span className="muted small" style={{ fontSize: '0.76rem' }}>
                 Ensure this code matches the digits shown on your laptop screen.
               </span>
             </div>
 
             {/* Device Info */}
-            <div className="glass pad" style={{ padding: '10px 14px', borderRadius: '10px', fontSize: '0.84rem' }}>
+            <div className="glass pad" style={{ padding: '8px 12px', borderRadius: '10px', fontSize: '0.82rem' }}>
               <div><b>Device:</b> {details.deviceInfo || 'Laptop Browser'}</div>
               {details.ipAddress && <div><b>IP:</b> {details.ipAddress}</div>}
             </div>
 
-            {!user && (
-              <label className="lbl" style={{ margin: 0 }}>
-                Account Password (@{details.username})
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password to authorize"
-                  required
-                  autoComplete="current-password"
-                />
-              </label>
-            )}
+            {/* Double Password Fields */}
+            <label className="lbl" style={{ margin: 0 }}>
+              <span>1. Enter Account Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setErr('');
+                }}
+                placeholder="Type password"
+                required
+                autoComplete="current-password"
+              />
+            </label>
+
+            <label className="lbl" style={{ margin: 0 }}>
+              <span>2. Re-enter Password (Confirm Again)</span>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  setErr('');
+                }}
+                placeholder="Confirm password"
+                required
+                autoComplete="current-password"
+                style={{
+                  borderColor: mismatch ? '#f87171' : undefined,
+                }}
+              />
+              {mismatch && (
+                <span className="error small" style={{ fontSize: '0.76rem', marginTop: '2px' }}>
+                  ⚠️ Passwords must match
+                </span>
+              )}
+            </label>
 
             {err && <p className="error small" style={{ margin: 0 }}>{err}</p>}
 
@@ -232,15 +278,15 @@ export default function MobileUnlockPage() {
                 {busy ? '…' : '❌ Deny'}
               </button>
               <button
-                type="button"
+                type="submit"
                 className="btn primary"
-                onClick={handleApprove}
-                disabled={busy}
+                disabled={busy || mismatch || !password || !confirmPassword}
+                style={{ fontWeight: 600 }}
               >
-                {busy ? 'Verifying…' : '✅ Approve Laptop'}
+                {busy ? 'Verifying…' : '🔒 Verify & Unlock'}
               </button>
             </div>
-          </div>
+          </form>
         )}
       </motion.div>
     </div>

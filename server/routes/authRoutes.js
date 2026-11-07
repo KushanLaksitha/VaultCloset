@@ -293,9 +293,9 @@ router.get('/mobile-auth/pending', requireAuth, wrap(async (req, res) => {
 }));
 
 
-// Approve or reject desktop login request from mobile app
+// Approve or reject desktop login request from mobile app (requires double password verification)
 router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
-  const { requestId, approve } = req.body;
+  const { requestId, approve, password, confirmPassword } = req.body;
   if (!requestId) throw new AppError(400, 'Missing requestId');
 
   const [[row]] = await db.query(
@@ -311,12 +311,24 @@ router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
   }
 
   if (approve) {
+    const pw = String(password || '');
+    const confirmPw = String(confirmPassword || '');
+    if (!pw) throw new AppError(400, 'Please enter your account password');
+    if (!confirmPw) throw new AppError(400, 'Please re-enter your account password for confirmation');
+    if (pw !== confirmPw) throw new AppError(400, 'Passwords do not match. Please re-enter both correctly.');
+
+    const [[u]] = await db.query('SELECT password_hash FROM users WHERE id=?', [req.user.id]);
+    if (!u) throw new AppError(404, 'User not found');
+
+    const ok = await bcrypt.compare(pw, u.password_hash);
+    if (!ok) throw new AppError(403, 'Incorrect password. Laptop authorization rejected.');
+
     const sessionToken = signSession(req.user.id);
     await db.query(
       "UPDATE desktop_login_requests SET status='approved', session_token=? WHERE id=?",
       [sessionToken, requestId]
     );
-    await log(req.user.id, 'mobile_auth_approved', `Approved desktop session from device ${row.device_info || 'Unknown'} (Code: ${row.security_code})`);
+    await log(req.user.id, 'mobile_auth_approved', `Approved desktop session from device ${row.device_info || 'Unknown'} with double password confirmation (Code: ${row.security_code})`);
     return res.json({ ok: true, status: 'approved' });
   } else {
     await db.query("UPDATE desktop_login_requests SET status='rejected' WHERE id=?", [requestId]);
@@ -358,9 +370,9 @@ router.get('/mobile-auth/request-details/:id', wrap(async (req, res) => {
 }));
 
 
-// Direct QR code unlock from mobile (when mobile user authorizes via password)
+// Direct QR code unlock from mobile (requires double password verification)
 router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
-  const { requestId, password, approve } = req.body;
+  const { requestId, password, confirmPassword, approve } = req.body;
   if (!requestId) throw new AppError(400, 'Missing requestId');
 
   const [[row]] = await db.query('SELECT * FROM desktop_login_requests WHERE id=?', [requestId]);
@@ -372,16 +384,22 @@ router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
   const [[u]] = await db.query('SELECT * FROM users WHERE id=?', [row.user_id]);
   if (!u) throw new AppError(404, 'User not found');
 
-  const ok = await bcrypt.compare(String(password || ''), u.password_hash);
-  if (!ok) throw new AppError(403, 'Incorrect password');
-
   if (approve) {
+    const pw = String(password || '');
+    const confirmPw = String(confirmPassword || '');
+    if (!pw) throw new AppError(400, 'Please enter your account password');
+    if (!confirmPw) throw new AppError(400, 'Please re-enter your account password for confirmation');
+    if (pw !== confirmPw) throw new AppError(400, 'Passwords do not match. Please re-enter both correctly.');
+
+    const ok = await bcrypt.compare(pw, u.password_hash);
+    if (!ok) throw new AppError(403, 'Incorrect password. Laptop authorization rejected.');
+
     const sessionToken = signSession(u.id);
     await db.query(
       "UPDATE desktop_login_requests SET status='approved', session_token=? WHERE id=?",
       [sessionToken, requestId]
     );
-    await log(u.id, 'mobile_auth_approved', `Approved desktop session via mobile QR unlock (Code: ${row.security_code})`);
+    await log(u.id, 'mobile_auth_approved', `Approved desktop session via mobile QR unlock with double password confirmation (Code: ${row.security_code})`);
 
     // Also sign in this mobile device so user is ready
     res.cookie('vc_session', sessionToken, cookieOpts).json({
