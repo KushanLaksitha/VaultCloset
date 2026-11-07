@@ -28,23 +28,18 @@ function detectFileType(mimetype, filename) {
 }
 
 // ---------- 1. Upload files (Manual only, Zero AI scan) ----------
-router.post('/upload', upload.array('files', 10), wrap(async (req, res) => {
+router.post('/upload', upload.array('files', 20), wrap(async (req, res) => {
   if (!req.files?.length) throw new AppError(400, 'No files received');
-  const categoryId = +req.body.categoryId;
-  if (!categoryId) throw new AppError(400, 'Invalid category');
+  const specifiedCatId = +req.body.categoryId || null;
 
-  const [[catRow]] = await db.query(
-    'SELECT id, name, target_type, pin_hash FROM categories WHERE id=? AND user_id=?',
-    [categoryId, req.user.id]
-  );
-  if (!catRow) throw new AppError(400, 'Category not found or not yours');
-
-  // Verify PIN if category is locked
-  if (catRow.pin_hash && !getUnlocked(req).includes(categoryId)) {
-    throw new AppError(403, 'This folder is password protected. Enter PIN to upload.', 'LOCKED_CATEGORY');
+  let selectedCat = null;
+  if (specifiedCatId) {
+    const [[c]] = await db.query(
+      'SELECT id, name, target_type, pin_hash FROM categories WHERE id=? AND user_id=?',
+      [specifiedCatId, req.user.id]
+    );
+    selectedCat = c || null;
   }
-
-  const catName = decryptCategory(catRow.name, req.user.id);
 
   const results = [];
   for (const file of req.files) {
@@ -52,6 +47,33 @@ router.post('/upload', upload.array('files', 10), wrap(async (req, res) => {
     try {
       const hash = sha256(file.buffer);
       const fileType = detectFileType(file.mimetype, filename);
+
+      // Determine target category for this specific file
+      let targetCatId = selectedCat?.id;
+      let targetCatName = selectedCat ? decryptCategory(selectedCat.name, req.user.id) : null;
+
+      // If category wasn't provided or its target_type doesn't match this file's type,
+      // route to user's default category of the matching type (video or document)
+      if (!selectedCat || selectedCat.target_type !== fileType) {
+        const [matchingCats] = await db.query(
+          'SELECT id, name, pin_hash FROM categories WHERE user_id=? AND target_type=? ORDER BY is_default DESC, id ASC LIMIT 1',
+          [req.user.id, fileType]
+        );
+        if (matchingCats.length) {
+          targetCatId = matchingCats[0].id;
+          targetCatName = decryptCategory(matchingCats[0].name, req.user.id);
+          if (matchingCats[0].pin_hash && !getUnlocked(req).includes(targetCatId)) {
+            throw new AppError(403, `This ${fileType} folder is password protected. Enter PIN to upload.`, 'LOCKED_CATEGORY');
+          }
+        } else {
+          throw new AppError(400, `No ${fileType} category found for your account. Please create one first.`);
+        }
+      } else {
+        // Verify PIN if selected category is locked
+        if (selectedCat.pin_hash && !getUnlocked(req).includes(selectedCat.id)) {
+          throw new AppError(403, 'This folder is password protected. Enter PIN to upload.', 'LOCKED_CATEGORY');
+        }
+      }
 
       // Duplicate check strictly by content hash
       const [dup] = await db.query(
@@ -88,7 +110,7 @@ router.post('/upload', upload.array('files', 10), wrap(async (req, res) => {
         ) VALUES (?,?,?,?,?,?,?,?,?)`,
         [
           req.user.id,
-          categoryId,
+          targetCatId,
           filename,
           encFileRef,
           v.wrappedKey,
@@ -104,7 +126,7 @@ router.post('/upload', upload.array('files', 10), wrap(async (req, res) => {
         filename,
         status: 'saved',
         fileId: r.insertId,
-        category: catName,
+        category: targetCatName,
         fileType,
         size: file.buffer.length,
       });
