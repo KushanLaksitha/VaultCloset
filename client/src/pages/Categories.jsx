@@ -5,6 +5,7 @@ import { categoryService } from '../services/categoryService.js';
 import { unlockedStore } from '../services/api.js';
 import { useApp } from '../context/AppContext.jsx';
 import Modal from '../components/Modal.jsx';
+import CategoryUnlockModal from '../components/CategoryUnlockModal.jsx';
 
 export default function Categories() {
   const { toast } = useApp();
@@ -455,48 +456,25 @@ export default function Categories() {
         </form>
       </Modal>
 
-      {/* Stealth Unlock Modal — NO category name shown; completely generic */}
-      <Modal
+      {/* Stealth / Mobile Unlock Modal */}
+      <CategoryUnlockModal
         open={!!unlockModal}
-        onClose={() => {
+        onClose={() => setUnlockModal(null)}
+        categoryId={unlockModal?.id}
+        targetType={unlockModal?.targetType}
+        onUnlocked={(res) => {
+          setRevealed(unlockedStore.getNames());
+          toast(`Folder "${res.name || 'Folder'}" unlocked`);
+          const catId = unlockModal.id;
+          const tType = unlockModal.targetType;
           setUnlockModal(null);
-          setUnlockPin('');
+          if (tType === 'image') {
+            navigate(`/gallery?category=${catId}`);
+          } else {
+            navigate(`/files?category=${catId}&type=${tType}`);
+          }
         }}
-        title="Protected Folder"
-      >
-        <form onSubmit={handleUnlockSubmit} style={{ display: 'grid', gap: '14px' }}>
-          <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-            This folder is protected. Enter its password to reveal and view its contents.
-          </p>
-          <label className="lbl" style={{ margin: 0 }}>
-            Folder Password
-            <input
-              type="password"
-              autoFocus
-              required
-              placeholder="Enter folder password"
-              value={unlockPin}
-              onChange={(e) => setUnlockPin(e.target.value)}
-            />
-          </label>
-          <div className="row end">
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={() => {
-                setUnlockModal(null);
-                setUnlockPin('');
-              }}
-              disabled={unlockSubmitting}
-            >
-              Cancel
-            </button>
-            <button type="submit" className="btn primary" disabled={unlockSubmitting || !unlockPin}>
-              {unlockSubmitting ? 'Verifying…' : 'Reveal & View Contents'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      />
 
       {/* PIN / Password Setting Modal */}
       <Modal

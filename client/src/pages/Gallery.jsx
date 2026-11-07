@@ -7,6 +7,7 @@ import { useApp } from '../context/AppContext.jsx';
 import SecureImage from '../components/SecureImage.jsx';
 import SecureImageViewer from '../components/SecureImageViewer.jsx';
 import Modal from '../components/Modal.jsx';
+import CategoryUnlockModal from '../components/CategoryUnlockModal.jsx';
 
 const EMPTY = { q: '', category: '', favorite: false, approval: '', catSource: '', aiClass: '', from: '', to: '', sort: 'newest' };
 
@@ -380,40 +381,19 @@ export default function Gallery() {
         </div>
       </Modal>
 
-      {/* Password Unlock Modal for Protected Folders */}
-      <Modal open={!!lockModal} onClose={() => setLockModal(null)} title={`🔒 Unlock “${lockModal?.catName}”`}>
-        <form onSubmit={handleUnlockSubmit} style={{ display: 'grid', gap: '14px' }}>
-          <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-            This folder is protected by a password. Enter its password to view the photos inside.
-          </p>
-          <label className="lbl" style={{ margin: 0 }}>
-            Folder Password
-            <input
-              type="password"
-              autoFocus
-              required
-              placeholder="Enter folder password"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-            />
-          </label>
-          <div className="row end">
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={() => {
-                setLockModal(null);
-                setPinInput('');
-              }}
-            >
-              Cancel
-            </button>
-            <button type="submit" className="btn primary" disabled={pinVerifying}>
-              {pinVerifying ? 'Checking…' : 'Unlock Folder'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {/* Password / Mobile Unlock Modal for Protected Folders */}
+      <CategoryUnlockModal
+        open={!!lockModal}
+        onClose={() => setLockModal(null)}
+        categoryId={lockModal?.catId}
+        targetType="Photo Category"
+        onUnlocked={(res) => {
+          toast(`“${res.name || 'Folder'}” unlocked`);
+          const targetCatId = String(res.categoryId || lockModal?.catId);
+          setLockModal(null);
+          setF((prev) => ({ ...prev, category: targetCatId }));
+        }}
+      />
 
       <AnimatePresence>
         {cur && (

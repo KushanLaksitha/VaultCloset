@@ -1,10 +1,107 @@
 const router = require('express').Router();
+const crypto = require('crypto');
 const db = require('../config/db');
 const bcrypt = require('bcryptjs');
 const requireAuth = require('../middleware/authMiddleware');
 const { AppError, wrap } = require('../utils/errors');
 const { log, getCategories } = require('../services/imageService');
 const { encryptCategory, decryptCategory } = require('../services/encryptionService');
+
+function getDeviceInfo(ua) {
+  if (!ua) return 'Desktop Browser';
+  let os = 'Desktop';
+  if (/Windows NT 10.0/i.test(ua)) os = 'Windows 10/11';
+  else if (/Windows NT 6.3/i.test(ua)) os = 'Windows 8.1';
+  else if (/Windows NT 6.1/i.test(ua)) os = 'Windows 7';
+  else if (/Windows/i.test(ua)) os = 'Windows PC';
+  else if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
+  else if (/Linux/i.test(ua) && !/Android/i.test(ua)) os = 'Linux PC';
+  else if (/iPhone/i.test(ua)) os = 'iPhone';
+  else if (/iPad/i.test(ua)) os = 'iPad';
+  else if (/Android/i.test(ua)) os = 'Android Phone';
+
+  let browser = 'Browser';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Chrome';
+  else if (/Safari\//i.test(ua) && !/Chrome/i.test(ua)) browser = 'Safari';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+
+  return `${os} · ${browser}`;
+}
+
+// ── Public QR code endpoints for Category Unlock (Accessible before session auth) ──
+
+router.get('/unlock-request-details/:id', wrap(async (req, res) => {
+  const { id } = req.params;
+  const [[row]] = await db.query(
+    `SELECT cur.id, cur.device_info AS deviceInfo, cur.ip_address AS ipAddress, cur.status, cur.expires_at AS expiresAt,
+            c.target_type AS targetType, u.username
+     FROM category_unlock_requests cur
+     JOIN categories c ON c.id = cur.category_id
+     JOIN users u ON u.id = cur.user_id
+     WHERE cur.id = ?`,
+    [id]
+  );
+  if (!row) throw new AppError(404, 'Category unlock request not found');
+
+  const expired = new Date(row.expiresAt) < new Date();
+  if (expired && row.status === 'pending') {
+    await db.query("UPDATE category_unlock_requests SET status='expired' WHERE id=?", [id]);
+    row.status = 'expired';
+  }
+
+  res.json({
+    id: row.id,
+    deviceInfo: row.deviceInfo,
+    ipAddress: row.ipAddress,
+    status: row.status,
+    targetType: row.targetType,
+    username: row.username,
+    expiresAt: row.expiresAt,
+  });
+}));
+
+router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
+  const { requestId, matchCode, password, confirmPassword, approve } = req.body;
+  if (!requestId) throw new AppError(400, 'Missing requestId');
+
+  const [[row]] = await db.query('SELECT * FROM category_unlock_requests WHERE id=?', [requestId]);
+  if (!row) throw new AppError(404, 'Category unlock request not found');
+  if (row.status !== 'pending' || new Date(row.expires_at) < new Date()) {
+    throw new AppError(400, 'This unlock request has already expired or been completed');
+  }
+
+  if (approve) {
+    const inputCode = String(matchCode || '').replace(/\s+/g, '').trim();
+    const expectedCode = String(row.security_code || '').replace(/\s+/g, '').trim();
+    if (!inputCode) throw new AppError(400, 'Please enter the 6-digit Security Match Code shown on your laptop screen');
+    if (inputCode !== expectedCode) throw new AppError(403, 'Incorrect Security Match Code');
+
+    const pw = String(password || '');
+    const confirmPw = String(confirmPassword || '');
+    if (!pw || !confirmPw) throw new AppError(400, 'Please enter and confirm your password');
+    if (pw !== confirmPw) throw new AppError(400, 'Passwords do not match. Please re-enter both correctly.');
+
+    const [[cat]] = await db.query('SELECT * FROM categories WHERE id=?', [row.category_id]);
+    if (!cat) throw new AppError(404, 'Category not found');
+
+    const [[u]] = await db.query('SELECT password_hash FROM users WHERE id=?', [row.user_id]);
+    if (!u) throw new AppError(404, 'User not found');
+
+    const catOk = cat.pin_hash ? await bcrypt.compare(pw, cat.pin_hash) : false;
+    const userOk = await bcrypt.compare(pw, u.password_hash);
+    if (!catOk && !userOk) throw new AppError(403, 'Incorrect password. Folder unlock rejected.');
+
+    await db.query("UPDATE category_unlock_requests SET status='approved' WHERE id=?", [requestId]);
+    await log(row.user_id, 'category_mobile_unlocked', `Unlocked folder #${cat.id} via mobile QR unlock`);
+
+    res.json({ ok: true, status: 'approved' });
+  } else {
+    await db.query("UPDATE category_unlock_requests SET status='rejected' WHERE id=?", [requestId]);
+    res.json({ ok: true, status: 'rejected' });
+  }
+}));
+
 router.use(requireAuth);
 
 const cleanName = (v) => {
@@ -240,6 +337,177 @@ router.post('/:id/pin/verify', wrap(async (req, res) => {
   }
 
   res.json({ ok: true, name: decryptedName, targetType: cat.target_type, imageCount: Number(itemCount) });
+}));
+
+
+// ── Category Mobile Unlock Gate Endpoints (Authenticated) ──
+
+// Laptop requests mobile authorization to unlock a protected category
+router.post('/:id/mobile-unlock-request', wrap(async (req, res) => {
+  const cat = await ownedCat(req.user.id, +req.params.id);
+  if (!cat) throw new AppError(404, 'Category not found or not yours');
+
+  let itemCount = 0;
+  if (cat.target_type === 'image') {
+    const [[r]] = await db.query('SELECT COUNT(*) AS n FROM images WHERE category_id=? AND user_id=?', [cat.id, req.user.id]);
+    itemCount = r.n;
+  } else {
+    const [[r]] = await db.query('SELECT COUNT(*) AS n FROM vault_files WHERE category_id=? AND user_id=?', [cat.id, req.user.id]);
+    itemCount = r.n;
+  }
+
+  // If category has no PIN, it's already open
+  if (!cat.pin_hash) {
+    const decryptedName = decryptCategory(cat.name, req.user.id);
+    return res.json({ alreadyUnlocked: true, categoryId: cat.id, name: decryptedName, targetType: cat.target_type, imageCount: Number(itemCount) });
+  }
+
+  // Invalidate any older pending requests for this category and user
+  await db.query("UPDATE category_unlock_requests SET status='expired' WHERE user_id=? AND category_id=? AND status='pending'", [req.user.id, cat.id]);
+
+  const requestId = crypto.randomUUID();
+  const rawCode = String(crypto.randomInt(100000, 999999));
+  const securityCode = `${rawCode.slice(0, 3)} ${rawCode.slice(3)}`;
+  const deviceInfo = getDeviceInfo(req.headers['user-agent']);
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const expiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 minutes
+
+  await db.query(
+    `INSERT INTO category_unlock_requests (id, user_id, category_id, security_code, status, device_info, ip_address, expires_at)
+     VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+    [requestId, req.user.id, cat.id, securityCode, deviceInfo, ip, expiresAt]
+  );
+
+  await log(req.user.id, 'category_mobile_unlock_requested', `Folder unlock requested via mobile for category #${cat.id} (Code: ${securityCode})`);
+
+  res.json({
+    requestId,
+    securityCode,
+    categoryId: cat.id,
+    targetType: cat.target_type,
+    deviceInfo,
+    expiresIn: 180,
+  });
+}));
+
+
+// Poll status of category unlock request (Laptop polls this)
+router.get('/unlock-request/:id/status', wrap(async (req, res) => {
+  const { id } = req.params;
+  const [[row]] = await db.query('SELECT * FROM category_unlock_requests WHERE id=? AND user_id=?', [id, req.user.id]);
+  if (!row) return res.json({ status: 'not_found' });
+
+  const now = new Date();
+  if (new Date(row.expires_at) < now && row.status === 'pending') {
+    await db.query("UPDATE category_unlock_requests SET status='expired' WHERE id=?", [id]);
+    return res.json({ status: 'expired' });
+  }
+
+  if (row.status === 'approved') {
+    const cat = await ownedCat(req.user.id, row.category_id);
+    if (!cat) throw new AppError(404, 'Category not found');
+
+    const decryptedName = decryptCategory(cat.name, req.user.id);
+    let itemCount = 0;
+    if (cat.target_type === 'image') {
+      const [[r]] = await db.query('SELECT COUNT(*) AS n FROM images WHERE category_id=? AND user_id=?', [cat.id, req.user.id]);
+      itemCount = r.n;
+    } else {
+      const [[r]] = await db.query('SELECT COUNT(*) AS n FROM vault_files WHERE category_id=? AND user_id=?', [cat.id, req.user.id]);
+      itemCount = r.n;
+    }
+
+    return res.json({
+      status: 'approved',
+      categoryId: cat.id,
+      name: decryptedName,
+      targetType: cat.target_type,
+      imageCount: Number(itemCount),
+    });
+  }
+
+  const remainingSeconds = Math.max(0, Math.round((new Date(row.expires_at) - now) / 1000));
+  return res.json({
+    status: row.status,
+    remainingSeconds,
+    securityCode: row.security_code,
+  });
+}));
+
+
+// Cancel a pending category unlock request
+router.post('/unlock-request/:id/cancel', wrap(async (req, res) => {
+  const { id } = req.params;
+  await db.query("UPDATE category_unlock_requests SET status='expired' WHERE id=? AND user_id=?", [id, req.user.id]);
+  res.json({ ok: true });
+}));
+
+
+// Check for pending category unlock requests (Mobile user polling)
+router.get('/mobile-auth/pending', wrap(async (req, res) => {
+  const [rows] = await db.query(
+    `SELECT cur.id, cur.category_id AS categoryId, c.target_type AS targetType, cur.device_info AS deviceInfo, cur.ip_address AS ipAddress, cur.created_at AS createdAt, cur.expires_at AS expiresAt
+     FROM category_unlock_requests cur
+     JOIN categories c ON c.id = cur.category_id
+     WHERE cur.user_id=? AND cur.status='pending' AND cur.expires_at > NOW()
+     ORDER BY cur.created_at DESC LIMIT 1`,
+    [req.user.id]
+  );
+  res.json({ pendingCategoryRequest: rows[0] || null });
+}));
+
+
+// Approve or reject category unlock request from mobile app
+router.post('/mobile-auth/respond', wrap(async (req, res) => {
+  const { requestId, approve, matchCode, password, confirmPassword } = req.body;
+  if (!requestId) throw new AppError(400, 'Missing requestId');
+
+  const [[row]] = await db.query(
+    'SELECT * FROM category_unlock_requests WHERE id=? AND user_id=?',
+    [requestId, req.user.id]
+  );
+  if (!row) throw new AppError(404, 'Category unlock request not found');
+  if (row.status !== 'pending') throw new AppError(400, `Request is already ${row.status}`);
+  if (new Date(row.expires_at) < new Date()) {
+    await db.query("UPDATE category_unlock_requests SET status='expired' WHERE id=?", [requestId]);
+    throw new AppError(400, 'Unlock request has expired');
+  }
+
+  if (approve) {
+    // 1. Verify 6-digit match code from laptop screen
+    const inputCode = String(matchCode || '').replace(/\s+/g, '').trim();
+    const expectedCode = String(row.security_code || '').replace(/\s+/g, '').trim();
+    if (!inputCode) throw new AppError(400, 'Please enter the 6-digit Security Match Code shown on your laptop screen');
+    if (inputCode !== expectedCode) throw new AppError(403, 'Incorrect Security Match Code. Check digits on laptop screen.');
+
+    // 2. Double password confirmation
+    const pw = String(password || '');
+    const confirmPw = String(confirmPassword || '');
+    if (!pw) throw new AppError(400, 'Please enter account or folder password');
+    if (!confirmPw) throw new AppError(400, 'Please re-enter password for confirmation');
+    if (pw !== confirmPw) throw new AppError(400, 'Passwords do not match. Please re-enter both accurately.');
+
+    // 3. Verify against category PIN OR user password
+    const cat = await ownedCat(req.user.id, row.category_id);
+    if (!cat) throw new AppError(404, 'Category not found');
+
+    const [[u]] = await db.query('SELECT password_hash FROM users WHERE id=?', [req.user.id]);
+    if (!u) throw new AppError(404, 'User not found');
+
+    const catOk = cat.pin_hash ? await bcrypt.compare(pw, cat.pin_hash) : false;
+    const userOk = await bcrypt.compare(pw, u.password_hash);
+    if (!catOk && !userOk) {
+      throw new AppError(403, 'Incorrect password. Folder unlock rejected.');
+    }
+
+    await db.query("UPDATE category_unlock_requests SET status='approved' WHERE id=?", [requestId]);
+    await log(req.user.id, 'category_mobile_unlocked', `Unlocked folder #${cat.id} via mobile authorization`);
+    return res.json({ ok: true, status: 'approved' });
+  } else {
+    await db.query("UPDATE category_unlock_requests SET status='rejected' WHERE id=?", [requestId]);
+    await log(req.user.id, 'category_mobile_rejected', `Rejected folder unlock for category #${row.category_id}`);
+    return res.json({ ok: true, status: 'rejected' });
+  }
 }));
 
 module.exports = router;

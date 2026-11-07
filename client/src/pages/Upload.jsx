@@ -6,6 +6,7 @@ import { categoryService } from '../services/categoryService.js';
 import { unlockedStore, fmtBytes } from '../services/api.js';
 import { useApp } from '../context/AppContext.jsx';
 import Modal from '../components/Modal.jsx';
+import CategoryUnlockModal from '../components/CategoryUnlockModal.jsx';
 
 // Server accepts: JPEG, PNG, WEBP, HEIC/HEIF (iPhone), AVIF (Android), GIF, TIFF, BMP
 // Client-side validation uses broad 'image/*' check; the server does final format validation
@@ -936,33 +937,18 @@ export default function Upload() {
         </div>
       </Modal>
 
-      {/* Folder PIN Unlock Modal */}
-      <Modal open={pinModalOpen} onClose={() => setPinModalOpen(false)} title={`Unlock “${selectedCategory?.name}”`}>
-        <form onSubmit={handleUnlockAndStart} style={{ display: 'grid', gap: '14px' }}>
-          <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-            This folder is password protected. Enter the folder password to upload photos into it.
-          </p>
-          <label className="lbl" style={{ margin: 0 }}>
-            Folder Password
-            <input
-              type="password"
-              autoFocus
-              required
-              placeholder="Enter password"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-            />
-          </label>
-          <div className="row end">
-            <button type="button" className="btn ghost" onClick={() => setPinModalOpen(false)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn primary" disabled={pinVerifying}>
-              {pinVerifying ? 'Unlocking…' : 'Unlock & Save'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {/* Folder Mobile / Direct Unlock Modal */}
+      <CategoryUnlockModal
+        open={pinModalOpen}
+        onClose={() => setPinModalOpen(false)}
+        categoryId={selectedCategory?.id}
+        targetType="Folder"
+        onUnlocked={(res) => {
+          toast(`Folder “${res.name || selectedCategory?.name || 'Folder'}” unlocked`);
+          setPinModalOpen(false);
+          setTimeout(() => start(), 100);
+        }}
+      />
     </>
   );
 }

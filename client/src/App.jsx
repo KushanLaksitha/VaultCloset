@@ -11,6 +11,7 @@ import Files from './pages/Files.jsx';
 import Rejected from './pages/Rejected.jsx';
 import Settings from './pages/Settings.jsx';
 import MobileUnlockPage from './pages/MobileUnlockPage.jsx';
+import MobileCategoryUnlockPage from './pages/MobileCategoryUnlockPage.jsx';
 
 export default function App() {
   const { user, booting } = useApp();
@@ -20,12 +21,14 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/unlock-request" element={<MobileUnlockPage />} />
+      <Route path="/unlock-category" element={<MobileCategoryUnlockPage />} />
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );
   return (
     <Routes>
       <Route path="/unlock-request" element={<MobileUnlockPage />} />
+      <Route path="/unlock-category" element={<MobileCategoryUnlockPage />} />
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/gallery" element={<Gallery />} />

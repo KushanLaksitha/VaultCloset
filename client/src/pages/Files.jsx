@@ -6,6 +6,7 @@ import { categoryService } from '../services/categoryService.js';
 import { unlockedStore, fmtBytes, ago } from '../services/api.js';
 import { useApp } from '../context/AppContext.jsx';
 import Modal from '../components/Modal.jsx';
+import CategoryUnlockModal from '../components/CategoryUnlockModal.jsx';
 
 const VIDEO_ACCEPT = 'video/*,.mp4,.webm,.mov,.mkv,.avi,.3gp,.m4v';
 const DOC_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z';
@@ -818,48 +819,21 @@ export default function Files() {
         )}
       </Modal>
 
-      {/* Stealth Unlock Modal for Category PIN */}
-      <Modal
+      {/* Stealth / Mobile Unlock Modal for Category PIN */}
+      <CategoryUnlockModal
         open={!!pinModal}
-        onClose={() => {
+        onClose={() => setPinModal(null)}
+        categoryId={pinModal?.catId}
+        targetType={f.type === 'video' ? 'Video Folder' : 'Document Folder'}
+        onUnlocked={(res) => {
+          const label = res.name || pinModal?.catName || 'Folder';
+          toast(`“${label}” unlocked`);
+          const targetCatId = String(res.categoryId || pinModal?.catId);
           setPinModal(null);
-          setPinInput('');
+          setF((prev) => ({ ...prev, category: targetCatId }));
+          loadCategories();
         }}
-        title="Protected Folder"
-      >
-        <form onSubmit={handlePinUnlock} style={{ display: 'grid', gap: '14px' }}>
-          <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-            This folder is protected. Enter its password to reveal and access its contents.
-          </p>
-          <label className="lbl" style={{ margin: 0 }}>
-            Folder Password
-            <input
-              type="password"
-              autoFocus
-              required
-              placeholder="Enter folder password"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-            />
-          </label>
-          <div className="row end">
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={() => {
-                setPinModal(null);
-                setPinInput('');
-              }}
-              disabled={pinVerifying}
-            >
-              Cancel
-            </button>
-            <button type="submit" className="btn primary" disabled={pinVerifying || !pinInput}>
-              {pinVerifying ? 'Verifying…' : 'Unlock & View'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      />
 
       {/* Delete Confirmation Modal */}
       <Modal
