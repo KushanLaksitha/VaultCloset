@@ -283,7 +283,7 @@ router.post('/login-request/:id/cancel', wrap(async (req, res) => {
 // Check for pending desktop login requests (Mobile user polling)
 router.get('/mobile-auth/pending', requireAuth, wrap(async (req, res) => {
   const [rows] = await db.query(
-    `SELECT id, security_code, device_info, ip_address, expires_at, created_at
+    `SELECT id, device_info, ip_address, expires_at, created_at
      FROM desktop_login_requests
      WHERE user_id=? AND status='pending' AND expires_at > NOW()
      ORDER BY created_at DESC LIMIT 1`,
@@ -293,9 +293,9 @@ router.get('/mobile-auth/pending', requireAuth, wrap(async (req, res) => {
 }));
 
 
-// Approve or reject desktop login request from mobile app (requires double password verification)
+// Approve or reject desktop login request from mobile app (requires match code and double password verification)
 router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
-  const { requestId, approve, password, confirmPassword } = req.body;
+  const { requestId, approve, matchCode, password, confirmPassword } = req.body;
   if (!requestId) throw new AppError(400, 'Missing requestId');
 
   const [[row]] = await db.query(
@@ -311,6 +311,17 @@ router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
   }
 
   if (approve) {
+    // 1. Verify 6-digit Security Match Code from laptop screen
+    const inputCode = String(matchCode || '').replace(/\s+/g, '').trim();
+    const expectedCode = String(row.security_code || '').replace(/\s+/g, '').trim();
+    if (!inputCode) {
+      throw new AppError(400, 'Please enter the 6-digit Security Match Code shown on your laptop screen');
+    }
+    if (inputCode !== expectedCode) {
+      throw new AppError(403, 'Incorrect Security Match Code. Please enter the exact digits displayed on your laptop.');
+    }
+
+    // 2. Verify Double Password Confirmation
     const pw = String(password || '');
     const confirmPw = String(confirmPassword || '');
     if (!pw) throw new AppError(400, 'Please enter your account password');
@@ -328,11 +339,11 @@ router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
       "UPDATE desktop_login_requests SET status='approved', session_token=? WHERE id=?",
       [sessionToken, requestId]
     );
-    await log(req.user.id, 'mobile_auth_approved', `Approved desktop session from device ${row.device_info || 'Unknown'} with double password confirmation (Code: ${row.security_code})`);
+    await log(req.user.id, 'mobile_auth_approved', `Approved desktop session from device ${row.device_info || 'Unknown'} with Match Code and double password confirmation`);
     return res.json({ ok: true, status: 'approved' });
   } else {
     await db.query("UPDATE desktop_login_requests SET status='rejected' WHERE id=?", [requestId]);
-    await log(req.user.id, 'mobile_auth_rejected', `Denied desktop session from device ${row.device_info || 'Unknown'} (Code: ${row.security_code})`);
+    await log(req.user.id, 'mobile_auth_rejected', `Denied desktop session from device ${row.device_info || 'Unknown'}`);
     return res.json({ ok: true, status: 'rejected' });
   }
 }));
@@ -342,7 +353,7 @@ router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
 router.get('/mobile-auth/request-details/:id', wrap(async (req, res) => {
   const { id } = req.params;
   const [[row]] = await db.query(
-    `SELECT dlr.id, dlr.security_code, dlr.device_info, dlr.ip_address, dlr.status, dlr.expires_at,
+    `SELECT dlr.id, dlr.device_info, dlr.ip_address, dlr.status, dlr.expires_at,
             u.username, u.display_name
      FROM desktop_login_requests dlr
      JOIN users u ON u.id = dlr.user_id
@@ -359,7 +370,6 @@ router.get('/mobile-auth/request-details/:id', wrap(async (req, res) => {
 
   res.json({
     id: row.id,
-    securityCode: row.security_code,
     deviceInfo: row.device_info,
     ipAddress: row.ip_address,
     status: row.status,
@@ -370,9 +380,9 @@ router.get('/mobile-auth/request-details/:id', wrap(async (req, res) => {
 }));
 
 
-// Direct QR code unlock from mobile (requires double password verification)
+// Direct QR code unlock from mobile (requires match code and double password verification)
 router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
-  const { requestId, password, confirmPassword, approve } = req.body;
+  const { requestId, matchCode, password, confirmPassword, approve } = req.body;
   if (!requestId) throw new AppError(400, 'Missing requestId');
 
   const [[row]] = await db.query('SELECT * FROM desktop_login_requests WHERE id=?', [requestId]);
@@ -385,6 +395,17 @@ router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
   if (!u) throw new AppError(404, 'User not found');
 
   if (approve) {
+    // 1. Verify 6-digit Security Match Code from laptop screen
+    const inputCode = String(matchCode || '').replace(/\s+/g, '').trim();
+    const expectedCode = String(row.security_code || '').replace(/\s+/g, '').trim();
+    if (!inputCode) {
+      throw new AppError(400, 'Please enter the 6-digit Security Match Code shown on your laptop screen');
+    }
+    if (inputCode !== expectedCode) {
+      throw new AppError(403, 'Incorrect Security Match Code. Please enter the exact digits displayed on your laptop.');
+    }
+
+    // 2. Verify Double Password Confirmation
     const pw = String(password || '');
     const confirmPw = String(confirmPassword || '');
     if (!pw) throw new AppError(400, 'Please enter your account password');
@@ -399,7 +420,7 @@ router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
       "UPDATE desktop_login_requests SET status='approved', session_token=? WHERE id=?",
       [sessionToken, requestId]
     );
-    await log(u.id, 'mobile_auth_approved', `Approved desktop session via mobile QR unlock with double password confirmation (Code: ${row.security_code})`);
+    await log(u.id, 'mobile_auth_approved', `Approved desktop session via mobile QR unlock with Match Code and double password confirmation`);
 
     // Also sign in this mobile device so user is ready
     res.cookie('vc_session', sessionToken, cookieOpts).json({
@@ -409,7 +430,7 @@ router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
     });
   } else {
     await db.query("UPDATE desktop_login_requests SET status='rejected' WHERE id=?", [requestId]);
-    await log(u.id, 'mobile_auth_rejected', `Denied desktop session via mobile QR unlock (Code: ${row.security_code})`);
+    await log(u.id, 'mobile_auth_rejected', `Denied desktop session via mobile QR unlock`);
     res.json({ ok: true, status: 'rejected' });
   }
 }));

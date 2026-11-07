@@ -13,6 +13,7 @@ export default function MobileUnlockPage() {
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  const [matchCode, setMatchCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -46,6 +47,11 @@ export default function MobileUnlockPage() {
     if (!requestId || busy) return;
     setErr('');
 
+    const cleanCode = matchCode.replace(/\s+/g, '').trim();
+    if (!cleanCode || cleanCode.length < 6) {
+      setErr('Please enter the 6-digit match code from your laptop screen');
+      return;
+    }
     if (!password) {
       setErr('Please enter your account password');
       return;
@@ -55,26 +61,28 @@ export default function MobileUnlockPage() {
       return;
     }
     if (password !== confirmPassword) {
-      setErr('Passwords do not match. Please re-enter both accurately.');
+      setErr('Passwords do not match. Please re-type both accurately.');
       return;
     }
 
     setBusy(true);
     try {
       if (user) {
-        // Authenticated approval with double password check
+        // Authenticated approval with match code & double password check
         await authService.respondMobileAuth({
           requestId,
           approve: true,
+          matchCode: cleanCode,
           password,
           confirmPassword,
         });
         setStatusResult('approved');
         toast?.('Laptop session approved!');
       } else {
-        // Direct unlock with double password check
+        // Direct unlock with match code & double password check
         const res = await authService.directUnlock({
           requestId,
+          matchCode: cleanCode,
           password,
           confirmPassword,
           approve: true,
@@ -84,7 +92,7 @@ export default function MobileUnlockPage() {
         toast?.('Laptop session unlocked!');
       }
     } catch (x) {
-      setErr(x.message || 'Incorrect password. Laptop authorization rejected.');
+      setErr(x.message || 'Incorrect match code or password. Laptop authorization rejected.');
     } finally {
       setBusy(false);
     }
@@ -98,7 +106,7 @@ export default function MobileUnlockPage() {
       if (user) {
         await authService.respondMobileAuth({ requestId, approve: false });
       } else {
-        await authService.directUnlock({ requestId, password: 'dummy', confirmPassword: 'dummy', approve: false }).catch(() => {});
+        await authService.directUnlock({ requestId, password: 'dummy', confirmPassword: 'dummy', matchCode: '000000', approve: false }).catch(() => {});
       }
       setStatusResult('rejected');
     } catch (x) {
@@ -187,38 +195,8 @@ export default function MobileUnlockPage() {
         {!loading && details && !statusResult && !err && (
           <form onSubmit={handleApprove} style={{ display: 'grid', gap: '14px', marginTop: '12px', textAlign: 'left' }}>
             <p className="muted" style={{ margin: 0, fontSize: '0.86rem', textAlign: 'center' }}>
-              A laptop device is requesting access to account <b>@{details.username}</b>. Verify the code and type your password twice to unlock.
+              A laptop is requesting access to account <b>@{details.username}</b>. Enter the 6-digit match code from your laptop and type your password twice.
             </p>
-
-            {/* Match Code Box */}
-            <div
-              style={{
-                background: 'rgba(232, 201, 165, 0.08)',
-                border: '1px solid var(--gold)',
-                borderRadius: '12px',
-                padding: '12px',
-                textAlign: 'center',
-              }}
-            >
-              <span className="muted small" style={{ display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.72rem' }}>
-                Security Match Code
-              </span>
-              <strong
-                style={{
-                  fontFamily: 'monospace',
-                  fontSize: '1.9rem',
-                  letterSpacing: '0.18em',
-                  color: 'var(--gold)',
-                  display: 'block',
-                  margin: '4px 0 2px',
-                }}
-              >
-                {details.securityCode}
-              </strong>
-              <span className="muted small" style={{ fontSize: '0.76rem' }}>
-                Ensure this code matches the digits shown on your laptop screen.
-              </span>
-            </div>
 
             {/* Device Info */}
             <div className="glass pad" style={{ padding: '8px 12px', borderRadius: '10px', fontSize: '0.82rem' }}>
@@ -226,9 +204,42 @@ export default function MobileUnlockPage() {
               {details.ipAddress && <div><b>IP:</b> {details.ipAddress}</div>}
             </div>
 
+            {/* Match Code Input */}
+            <label className="lbl" style={{ margin: 0 }}>
+              <span style={{ color: 'var(--gold)', fontWeight: 600 }}>
+                1. Enter Security Match Code (From Laptop Screen)
+              </span>
+              <input
+                type="text"
+                value={matchCode}
+                onChange={(e) => {
+                  setMatchCode(e.target.value);
+                  setErr('');
+                }}
+                placeholder="e.g. 748 192"
+                required
+                autoFocus
+                maxLength={8}
+                style={{
+                  fontFamily: 'monospace',
+                  fontSize: '1.3rem',
+                  letterSpacing: '0.14em',
+                  textAlign: 'center',
+                  fontWeight: 700,
+                  color: 'var(--gold)',
+                  background: 'rgba(232, 201, 165, 0.08)',
+                  borderColor: 'var(--gold)',
+                }}
+                autoComplete="off"
+              />
+              <span className="muted small" style={{ fontSize: '0.74rem', marginTop: '2px' }}>
+                Look at the 6 digits displayed on your laptop screen.
+              </span>
+            </label>
+
             {/* Double Password Fields */}
             <label className="lbl" style={{ margin: 0 }}>
-              <span>1. Enter Account Password</span>
+              <span>2. Enter Account Password</span>
               <input
                 type="password"
                 value={password}
@@ -243,7 +254,7 @@ export default function MobileUnlockPage() {
             </label>
 
             <label className="lbl" style={{ margin: 0 }}>
-              <span>2. Re-enter Password (Confirm Again)</span>
+              <span>3. Re-enter Password (Confirm Again)</span>
               <input
                 type="password"
                 value={confirmPassword}
@@ -280,7 +291,7 @@ export default function MobileUnlockPage() {
               <button
                 type="submit"
                 className="btn primary"
-                disabled={busy || mismatch || !password || !confirmPassword}
+                disabled={busy || mismatch || !matchCode || !password || !confirmPassword}
                 style={{ fontWeight: 600 }}
               >
                 {busy ? 'Verifying…' : '🔒 Verify & Unlock'}

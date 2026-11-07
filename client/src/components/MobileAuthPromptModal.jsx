@@ -6,6 +6,7 @@ import { useApp } from '../context/AppContext.jsx';
 export default function MobileAuthPromptModal() {
   const { user, toast } = useApp();
   const [pending, setPending] = useState(null);
+  const [matchCode, setMatchCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [err, setErr] = useState('');
@@ -30,6 +31,7 @@ export default function MobileAuthPromptModal() {
           setPending(res.pendingRequest);
         } else if (!res.pendingRequest) {
           setPending(null);
+          setMatchCode('');
           setPassword('');
           setConfirmPassword('');
           setErr('');
@@ -51,16 +53,21 @@ export default function MobileAuthPromptModal() {
     if (!pending || busy) return;
 
     setErr('');
+    const cleanCode = matchCode.replace(/\s+/g, '').trim();
+    if (!cleanCode || cleanCode.length < 6) {
+      setErr('Please enter the 6-digit match code from your laptop screen');
+      return;
+    }
     if (!password) {
       setErr('Please enter your account password');
       return;
     }
     if (!confirmPassword) {
-      setErr('Please type your password again (confirm password)');
+      setErr('Please re-enter your account password (confirm password)');
       return;
     }
     if (password !== confirmPassword) {
-      setErr('Passwords do not match. Please type both accurately.');
+      setErr('Passwords do not match. Please re-type both accurately.');
       return;
     }
 
@@ -69,16 +76,18 @@ export default function MobileAuthPromptModal() {
       await authService.respondMobileAuth({
         requestId: pending.id,
         approve: true,
+        matchCode: cleanCode,
         password,
         confirmPassword,
       });
       setDismissedId(pending.id);
       setPending(null);
+      setMatchCode('');
       setPassword('');
       setConfirmPassword('');
       toast('✅ Laptop session approved & unlocked!', 'ok');
     } catch (error) {
-      setErr(error.message || 'Incorrect password. Unlock failed.');
+      setErr(error.message || 'Verification failed. Please check the code and password.');
     } finally {
       setBusy(false);
     }
@@ -91,6 +100,7 @@ export default function MobileAuthPromptModal() {
       await authService.respondMobileAuth({ requestId: pending.id, approve: false });
       setDismissedId(pending.id);
       setPending(null);
+      setMatchCode('');
       setPassword('');
       setConfirmPassword('');
       setErr('');
@@ -140,38 +150,8 @@ export default function MobileAuthPromptModal() {
           <div style={{ fontSize: '2.4rem', marginBottom: '4px' }}>🔒</div>
           <h2 style={{ margin: '0 0 4px', fontSize: '1.35rem' }}>Authorize Laptop Session</h2>
           <p className="muted small" style={{ margin: '0 0 12px' }}>
-            To unlock your laptop, verify the code and type your password twice.
+            A laptop is requesting access. Look at your laptop monitor, enter the 6-digit match code, and type your password twice.
           </p>
-
-          {/* Security Match Code */}
-          <div
-            style={{
-              background: 'rgba(232, 201, 165, 0.1)',
-              border: '1px solid var(--gold)',
-              borderRadius: '12px',
-              padding: '10px 12px',
-              marginBottom: '12px',
-            }}
-          >
-            <span className="muted small" style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.7rem' }}>
-              Security Match Code
-            </span>
-            <div
-              style={{
-                fontFamily: 'monospace',
-                fontSize: '1.9rem',
-                letterSpacing: '0.18em',
-                color: 'var(--gold)',
-                fontWeight: 700,
-                margin: '2px 0',
-              }}
-            >
-              {pending.security_code}
-            </div>
-            <span className="muted small" style={{ fontSize: '0.74rem' }}>
-              Confirm this matches the digits on your laptop screen.
-            </span>
-          </div>
 
           {/* Device details */}
           <div
@@ -181,7 +161,7 @@ export default function MobileAuthPromptModal() {
               padding: '8px 12px',
               borderRadius: '10px',
               fontSize: '0.82rem',
-              marginBottom: '14px',
+              marginBottom: '12px',
               background: 'rgba(255, 255, 255, 0.03)',
             }}
           >
@@ -189,14 +169,45 @@ export default function MobileAuthPromptModal() {
             {pending.ip_address && <div><b>IP:</b> {pending.ip_address}</div>}
           </div>
 
-          {/* Double Password Verification Form */}
+          {/* Verification Form */}
           <form onSubmit={handleApprove} style={{ display: 'grid', gap: '10px', textAlign: 'left' }}>
             <label className="lbl" style={{ margin: 0 }}>
-              <span>1. Enter Account Password</span>
+              <span style={{ color: 'var(--gold)', fontWeight: 600 }}>
+                1. Enter Security Match Code (From Laptop Screen)
+              </span>
+              <input
+                type="text"
+                required
+                autoFocus
+                placeholder="e.g. 748 192"
+                value={matchCode}
+                onChange={(e) => {
+                  setMatchCode(e.target.value);
+                  setErr('');
+                }}
+                maxLength={8}
+                style={{
+                  fontFamily: 'monospace',
+                  fontSize: '1.3rem',
+                  letterSpacing: '0.14em',
+                  textAlign: 'center',
+                  fontWeight: 700,
+                  color: 'var(--gold)',
+                  background: 'rgba(232, 201, 165, 0.08)',
+                  borderColor: 'var(--gold)',
+                }}
+                autoComplete="off"
+              />
+              <span className="muted small" style={{ fontSize: '0.74rem', marginTop: '2px' }}>
+                Look at the 6 digits displayed on your laptop screen.
+              </span>
+            </label>
+
+            <label className="lbl" style={{ margin: 0 }}>
+              <span>2. Enter Account Password</span>
               <input
                 type="password"
                 required
-                autoFocus
                 placeholder="Type password"
                 value={password}
                 onChange={(e) => {
@@ -208,7 +219,7 @@ export default function MobileAuthPromptModal() {
             </label>
 
             <label className="lbl" style={{ margin: 0 }}>
-              <span>2. Re-enter Password (Confirm Again)</span>
+              <span>3. Re-enter Password (Confirm Again)</span>
               <input
                 type="password"
                 required
@@ -245,7 +256,7 @@ export default function MobileAuthPromptModal() {
               <button
                 type="submit"
                 className="btn primary"
-                disabled={busy || mismatch || !password || !confirmPassword}
+                disabled={busy || mismatch || !matchCode || !password || !confirmPassword}
                 style={{ fontWeight: 600 }}
               >
                 {busy ? 'Verifying…' : '🔒 Verify & Unlock'}

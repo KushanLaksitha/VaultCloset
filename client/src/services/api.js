@@ -71,17 +71,19 @@ async function request(path, { method = 'GET', body, form, signal } = {}) {
   }
 
   let data = {};
+  let rawText = '';
   try {
-    data = await res.json();
+    rawText = await res.text();
+    data = JSON.parse(rawText);
   } catch {
-    /* empty body */
+    if (rawText) data = { error: rawText };
   }
 
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/auth/')) {
       window.dispatchEvent(new Event('vc:unauth'));
     }
-    const err = new Error(data.error || 'Something went wrong');
+    const err = new Error(data.error || res.statusText || 'Something went wrong');
     err.status = res.status;
     err.code = data.code;
     throw err;

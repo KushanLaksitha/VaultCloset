@@ -79,9 +79,45 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
-app.use('/api', rateLimit({ windowMs: 15 * 60e3, limit: 1500, standardHeaders: true, legacyHeaders: false }));
-app.use('/api/auth', rateLimit({ windowMs: 15 * 60e3, limit: 30, standardHeaders: true, legacyHeaders: false })); // auth brute-force protection
-app.use('/api/categories', rateLimit({ windowMs: 15 * 60e3, limit: 120, standardHeaders: true, legacyHeaders: false })); // pin brute-force protection
+
+// Rate limiters with JSON error payloads
+const jsonLimiterMsg = (msg) => ({ error: msg });
+
+app.use('/api', rateLimit({
+  windowMs: 15 * 60e3,
+  limit: 2500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: jsonLimiterMsg('Too many requests. Please try again later.')
+}));
+
+// Generous limiter for /api/auth to accommodate desktop/mobile status polling
+app.use('/api/auth', rateLimit({
+  windowMs: 15 * 60e3,
+  limit: 2000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: jsonLimiterMsg('Too many authentication requests. Please try again later.')
+}));
+
+// Dedicated strict limiter for sign-in and registration attempts to prevent brute force
+const authAttemptLimiter = rateLimit({
+  windowMs: 15 * 60e3,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: jsonLimiterMsg('Too many sign-in attempts from this network. Please try again in 15 minutes.')
+});
+app.use('/api/auth/login', authAttemptLimiter);
+app.use('/api/auth/register', authAttemptLimiter);
+
+app.use('/api/categories', rateLimit({
+  windowMs: 15 * 60e3,
+  limit: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: jsonLimiterMsg('Too many category requests. Please slow down.')
+}));
 
 // Local Wi-Fi network info endpoint for QR code mobile connect
 app.get('/api/network-info', (_req, res) => {
