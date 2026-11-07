@@ -9,7 +9,6 @@ export const fileService = {
     form.append('categoryId', categoryId);
     return api.request('/files/upload', { method: 'POST', form, signal });
   },
-  downloadToken: (id) => api.post(`/files/${id}/download-token`),
   favorite: (id) => api.post(`/files/${id}/favorite`, {}),
   setCategory: (id, categoryId) => api.patch(`/files/${id}/category`, { categoryId }),
   remove: (id) => api.del(`/files/${id}`),

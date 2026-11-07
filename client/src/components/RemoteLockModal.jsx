@@ -175,3 +175,4 @@ export default function RemoteLockModal({ open, onClose }) {
     </Modal>
   );
 }
+

@@ -238,28 +238,9 @@ router.get('/stats', wrap(async (req, res) => {
   });
 }));
 
-// ---------- 4. Request View/Download Token ----------
-router.post('/:id/download-token', wrap(async (req, res) => {
-  const [[file]] = await db.query(
-    `SELECT vf.id, vf.original_filename, vf.mime_type, vf.category_id, c.pin_hash AS catPinHash
-     FROM vault_files vf JOIN categories c ON c.id=vf.category_id
-     WHERE vf.id=? AND vf.user_id=?`,
-    [req.params.id, req.user.id]
-  );
-
-  if (!file) throw new AppError(404, 'File not found');
-
-  if (file.catPinHash && !getUnlocked(req).includes(file.category_id)) {
-    throw new AppError(403, 'This file is inside a password protected category', 'LOCKED_CATEGORY');
-  }
-
-  const token = signFile(req.user.id, file.id, 'stream', 3600);
-  res.json({
-    url: `/api/files/stream/${token}`,
-    filename: file.original_filename,
-    mimeType: file.mime_type,
-    expiresIn: 3600,
-  });
+// ---------- 4. Request View/Download Token (Disabled) ----------
+router.post('/:id/download-token', wrap(async () => {
+  throw new AppError(403, 'File downloading has been disabled for vault privacy and security. Files can only be viewed securely within the vault.', 'DOWNLOAD_DISABLED');
 }));
 
 // ---------- 5. Stream / Download File with Range (for Video Player) ----------

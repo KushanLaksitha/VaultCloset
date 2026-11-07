@@ -242,22 +242,6 @@ export default function Files() {
     });
   };
 
-  // Download file
-  const handleDownloadFile = async (file) => {
-    try {
-      const res = await fileService.downloadToken(file.id);
-      const downloadLink = document.createElement('a');
-      downloadLink.href = res.url;
-      downloadLink.download = res.filename || file.name;
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      document.body.removeChild(downloadLink);
-      toast(`Downloading “${file.name}”`);
-    } catch (err) {
-      toast(err.message || 'Download failed', 'err');
-    }
-  };
-
   // Toggle favorite
   const handleToggleFavorite = async (file) => {
     try {
@@ -752,16 +736,6 @@ export default function Files() {
 
                       <button
                         type="button"
-                        className="btn ghost sm"
-                        onClick={() => handleDownloadFile(file)}
-                        style={{ padding: '5px 10px', fontSize: '0.82rem' }}
-                        title="Download decrypted file"
-                      >
-                        ⬇ Download
-                      </button>
-
-                      <button
-                        type="button"
                         className="btn ghost danger sm"
                         onClick={() => setDelTarget(file)}
                         style={{ padding: '5px 8px', fontSize: '0.82rem' }}
@@ -800,20 +774,15 @@ export default function Files() {
               <video
                 src={playingVideo.url}
                 controls
+                controlsList="nodownload"
+                onContextMenu={(e) => e.preventDefault()}
                 autoPlay
                 playsInline
                 style={{ width: '100%', height: '100%', maxHeight: '65vh', objectFit: 'contain' }}
               />
             </div>
-            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-              <span className="muted small">🔒 Streamed directly from zero-knowledge encrypted vault</span>
-              <button
-                type="button"
-                className="btn primary sm"
-                onClick={() => handleDownloadFile(playingVideo)}
-              >
-                ⬇ Download Video
-              </button>
+            <div className="row" style={{ justifyContent: 'center', alignItems: 'center' }}>
+              <span className="muted small">🔒 Streamed directly from zero-knowledge encrypted vault (Download disabled for privacy)</span>
             </div>
           </div>
         )}
