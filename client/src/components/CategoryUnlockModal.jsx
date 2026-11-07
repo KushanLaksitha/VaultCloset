@@ -3,10 +3,10 @@ import QRCode from 'qrcode';
 import Modal from './Modal.jsx';
 import { categoryService } from '../services/categoryService.js';
 import { unlockedStore } from '../services/api.js';
-import { isMobileDevice } from './MobileAuthPromptModal.jsx';
+import { isRealMobilePhone } from '../services/deviceDetect.js';
 
 export default function CategoryUnlockModal({ open, onClose, categoryId, targetType = 'Folder', onUnlocked }) {
-  const isMobile = isMobileDevice();
+  const isMobile = isRealMobilePhone();
 
   const [loading, setLoading] = useState(false);
   const [reqData, setReqData] = useState(null);
@@ -227,13 +227,6 @@ export default function CategoryUnlockModal({ open, onClose, categoryId, targetT
               >
                 🔄 Try Again
               </button>
-              <button
-                type="button"
-                className="btn ghost sm"
-                onClick={() => { setErr(''); setShowDirectPin(true); }}
-              >
-                ⌨️ Use Password Instead
-              </button>
             </div>
           </div>
         )}
@@ -315,21 +308,11 @@ export default function CategoryUnlockModal({ open, onClose, categoryId, targetT
                 </div>
               </div>
             )}
-
-            {/* Alternative Direct PIN Toggle */}
-            <button
-              type="button"
-              className="btn ghost sm"
-              onClick={() => setShowDirectPin(true)}
-              style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '2px' }}
-            >
-              ⌨️ Or unlock with password directly on this device
-            </button>
           </>
         )}
 
-        {/* Direct Password Input Mode */}
-        {!loading && showDirectPin && (
+        {/* Direct Password Input Mode (Only on physical mobile devices) */}
+        {!loading && isMobile && showDirectPin && (
           <form onSubmit={handleDirectPinSubmit} style={{ display: 'grid', gap: '12px', textAlign: 'left' }}>
             <p className="muted small" style={{ margin: 0 }}>
               Enter the folder password to unlock directly on this device:

@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { categoryService } from '../services/categoryService.js';
 import { authService } from '../services/authService.js';
 import { useApp } from '../context/AppContext.jsx';
+import { isRealMobilePhone } from '../services/deviceDetect.js';
 
 export default function MobileCategoryUnlockPage() {
   const [searchParams] = useSearchParams();
@@ -13,6 +14,7 @@ export default function MobileCategoryUnlockPage() {
 
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(true);
+  const isMobile = isRealMobilePhone();
   const [err, setErr] = useState('');
   const [matchCode, setMatchCode] = useState('');
   const [password, setPassword] = useState('');
@@ -229,7 +231,30 @@ export default function MobileCategoryUnlockPage() {
           </div>
         )}
 
-        {!loading && details && !statusResult && !err && (
+        {!loading && !isMobile && !statusResult && !err && (
+          <div style={{ margin: '18px 0', display: 'grid', gap: '12px' }}>
+            <div style={{ fontSize: '3rem' }}>🚫</div>
+            <h3 style={{ color: 'var(--red, #f87171)', margin: 0 }}>Physical Mobile Phone Required</h3>
+            <p className="muted" style={{ fontSize: '0.88rem', margin: 0, lineHeight: 1.5 }}>
+              Laptop / PC browser detected. For vault security, folder unlock authorization can <b>only</b> be performed from a real mobile phone browser.
+            </p>
+            <div
+              style={{
+                padding: '12px 14px',
+                background: 'rgba(232, 201, 165, 0.08)',
+                borderRadius: '12px',
+                border: '1px solid var(--gold)',
+                color: 'var(--gold)',
+                fontSize: '0.82rem',
+                textAlign: 'left',
+              }}
+            >
+              📱 <b>How to unlock:</b> Open your mobile phone's camera and scan the QR code displayed on your laptop screen.
+            </div>
+          </div>
+        )}
+
+        {!loading && isMobile && details && !statusResult && !err && (
           <form onSubmit={handleApprove} style={{ display: 'grid', gap: '14px', marginTop: '12px', textAlign: 'left' }}>
             <p className="muted" style={{ margin: 0, fontSize: '0.86rem', textAlign: 'center' }}>
               A laptop is requesting to unlock a protected <b>{details.targetType?.toUpperCase() || 'Folder'}</b> for user <b>@{details.username}</b>.

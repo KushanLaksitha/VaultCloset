@@ -3,16 +3,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { authService } from '../services/authService.js';
 import { categoryService } from '../services/categoryService.js';
 import { useApp } from '../context/AppContext.jsx';
+import { isRealMobilePhone } from '../services/deviceDetect.js';
 
-// Determine if the current client is a mobile device (phone or tablet)
-export const isMobileDevice = () => {
-  if (typeof window === 'undefined') return false;
-  return (
-    /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-    window.innerWidth < 768 ||
-    ('ontouchstart' in window && window.innerWidth < 1024)
-  );
-};
+export const isMobileDevice = isRealMobilePhone;
 
 export default function MobileAuthPromptModal() {
   const { user, toast } = useApp();

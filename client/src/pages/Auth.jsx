@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import { authService } from '../services/authService.js';
 import { useApp } from '../context/AppContext.jsx';
 import MobileConnectModal from '../components/MobileConnectModal.jsx';
+import { isRealMobilePhone } from '../services/deviceDetect.js';
 
 export default function Auth({ mode }) {
   const reg = mode === 'register';
@@ -30,7 +31,7 @@ export default function Auth({ mode }) {
     setBusy(true);
     setErr('');
     try {
-      const isMobileClient = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
+      const isMobileClient = isRealMobilePhone();
       const res = await (reg ? authService.register(f) : authService.login({ ...f, isMobile: isMobileClient }));
 
       if (res.requireMobileAuth) {

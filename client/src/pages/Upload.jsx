@@ -7,6 +7,7 @@ import { unlockedStore, fmtBytes } from '../services/api.js';
 import { useApp } from '../context/AppContext.jsx';
 import Modal from '../components/Modal.jsx';
 import CategoryUnlockModal from '../components/CategoryUnlockModal.jsx';
+import { isRealMobilePhone } from '../services/deviceDetect.js';
 
 // Server accepts: JPEG, PNG, WEBP, HEIC/HEIF (iPhone), AVIF (Android), GIF, TIFF, BMP
 // Client-side validation uses broad 'image/*' check; the server does final format validation
@@ -109,8 +110,8 @@ export default function Upload() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
-  // Simple mobile/touch detection
-  const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ('ontouchstart' in window);
+  // Robust mobile detection (blocks DevTools emulation)
+  const isMobile = isRealMobilePhone();
 
   // Clean up any live camera stream on unmount
   useEffect(() => {

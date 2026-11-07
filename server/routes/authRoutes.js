@@ -41,10 +41,14 @@ function getDeviceInfo(ua) {
 }
 
 function isMobileUserAgent(ua, explicitMobileFlag) {
-  if (explicitMobileFlag === true) return true;
-  if (explicitMobileFlag === false) return false;
   if (!ua) return false;
-  return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  // If user-agent contains desktop operating systems, it is a desktop browser!
+  // Inspecting element or spoofing explicitMobileFlag will NOT bypass this.
+  if (/Windows NT|Win64|Win32|Macintosh|MacIntel|X11|Ubuntu|Fedora|CrOS/i.test(ua)) {
+    return false;
+  }
+  if (explicitMobileFlag === false) return false;
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
 }
 
 function validateUsername(val) {
@@ -295,6 +299,11 @@ router.get('/mobile-auth/pending', requireAuth, wrap(async (req, res) => {
 
 // Approve or reject desktop login request from mobile app (requires match code and double password verification)
 router.post('/mobile-auth/respond', requireAuth, wrap(async (req, res) => {
+  const ua = req.headers['user-agent'] || '';
+  if (/Windows NT|Win64|Win32|Macintosh|MacIntel|X11|Ubuntu|Fedora/i.test(ua)) {
+    throw new AppError(403, 'Mobile authorization can only be performed from a real mobile phone browser. Desktop browsers are prohibited.');
+  }
+
   const { requestId, approve, matchCode, password, confirmPassword } = req.body;
   if (!requestId) throw new AppError(400, 'Missing requestId');
 
@@ -382,6 +391,11 @@ router.get('/mobile-auth/request-details/:id', wrap(async (req, res) => {
 
 // Direct QR code unlock from mobile (requires match code and double password verification)
 router.post('/mobile-auth/direct-unlock', wrap(async (req, res) => {
+  const ua = req.headers['user-agent'] || '';
+  if (/Windows NT|Win64|Win32|Macintosh|MacIntel|X11|Ubuntu|Fedora/i.test(ua)) {
+    throw new AppError(403, 'Mobile authorization can only be performed from a real mobile phone browser. Desktop browsers are prohibited.');
+  }
+
   const { requestId, matchCode, password, confirmPassword, approve } = req.body;
   if (!requestId) throw new AppError(400, 'Missing requestId');
 
